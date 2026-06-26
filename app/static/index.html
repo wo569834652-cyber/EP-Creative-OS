@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EP Creative OS</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>EP Creative OS</h1>
+      <div id="status">loading</div>
+    </header>
+
+    <main>
+      <section class="panel ep-panel">
+        <h2>EP State</h2>
+        <label>Title <input id="ep-title" /></label>
+        <label>One Liner <textarea id="ep-one-liner"></textarea></label>
+        <label>Core Theme <textarea id="ep-core-theme"></textarea></label>
+        <label>World View <textarea id="ep-world-view"></textarea></label>
+        <label>Emotional Keywords <input id="ep-emotional" /></label>
+        <label>Aesthetic Keywords <input id="ep-aesthetic" /></label>
+        <label>Sonic Layers JSON <textarea id="ep-sonic"></textarea></label>
+        <label>Narrative Arc <textarea id="ep-arc"></textarea></label>
+        <button id="save-ep">Save EP</button>
+      </section>
+
+      <section class="panel songs-panel">
+        <div class="panel-head">
+          <h2>Songs</h2>
+          <button id="new-song">New</button>
+        </div>
+        <div id="song-list"></div>
+      </section>
+
+      <section class="panel editor-panel">
+        <h2>Current Song</h2>
+        <label>Title <input id="song-title" /></label>
+        <label>Function <textarea id="song-function"></textarea></label>
+        <label>Concept <textarea id="song-concept"></textarea></label>
+        <label>Emotional Goal <input id="song-emotional" /></label>
+        <label>BPM <input id="song-bpm" type="number" min="40" max="220" /></label>
+        <label>Genre Direction <input id="song-genre" /></label>
+        <label>Language Plan <input id="song-language" /></label>
+        <label>Lyrics <textarea id="song-lyrics" class="tall"></textarea></label>
+        <label>Style Prompt <textarea id="song-style" class="tall"></textarea></label>
+        <label>Lyrics Prompt <textarea id="song-lyrics-prompt" class="tall"></textarea></label>
+        <label>Notes <textarea id="song-notes"></textarea></label>
+        <button id="save-song">Save Song</button>
+      </section>
+
+      <section class="panel tools-panel">
+        <h2>Tools</h2>
+        <div class="button-row">
+          <button id="gen-hooks">Generate Hooks</button>
+          <button id="gen-suno">Generate Suno Prompt</button>
+          <button id="export-pack">Export Cubase Pack</button>
+        </div>
+        <label>Hook Goal <input id="hook-goal" value="短、重复、带系统残影的副歌 Hook" /></label>
+        <pre id="tool-output"></pre>
+      </section>
+
+      <section class="panel chat-panel">
+        <h2>Creative Chat</h2>
+        <label>Mode
+          <select id="chat-mode">
+            <option value="ideation">ideation</option>
+            <option value="critique">critique</option>
+            <option value="rewrite">rewrite</option>
+            <option value="suno_prompt">suno_prompt</option>
+            <option value="direction_fix">direction_fix</option>
+            <option value="hook_generation">hook_generation</option>
+          </select>
+        </label>
+        <textarea id="chat-message" class="tall" placeholder="和制作人顾问讨论这首歌..."></textarea>
+        <button id="send-chat">Send</button>
+        <pre id="chat-output"></pre>
+      </section>
+
+      <section class="panel versions-panel">
+        <h2>Versions</h2>
+        <div id="versions"></div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
