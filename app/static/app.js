@@ -62,6 +62,64 @@ function shortJson(value) {
   return JSON.stringify(value, null, 2).slice(0, 700);
 }
 
+function copyText(text) {
+  if (!text) return;
+  navigator.clipboard?.writeText(text).then(
+    () => toast("已复制"),
+    () => {
+      const area = document.createElement("textarea");
+      area.value = text;
+      document.body.append(area);
+      area.select();
+      document.execCommand("copy");
+      area.remove();
+      toast("已复制");
+    },
+  );
+}
+
+function promptPackView(artifact) {
+  const content = artifact.content || {};
+  const packs = content.packs || [];
+  if (!packs.length) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "prompt-pack-list";
+  packs.forEach((pack) => {
+    const item = document.createElement("section");
+    item.className = `prompt-pack-item ${pack.recommended ? "recommended" : ""}`;
+    item.innerHTML = `
+      <div class="prompt-pack-head">
+        <div>
+          <strong>${pack.variant}${pack.recommended ? " / 推荐" : ""}</strong>
+          <p>${pack.recommendation_reason || ""}</p>
+        </div>
+      </div>
+      <div class="prompt-block">
+        <div class="prompt-block-head"><span>Style Prompt</span></div>
+        <pre>${pack.style_prompt || ""}</pre>
+      </div>
+      <div class="prompt-block">
+        <div class="prompt-block-head"><span>Lyrics Prompt</span></div>
+        <pre>${pack.lyrics_prompt || ""}</pre>
+      </div>
+      <div class="prompt-notes">
+        <strong>修正策略</strong>
+        <p>${pack.revision_strategy || ""}</p>
+        <strong>风险</strong>
+        <p>${(pack.suno_risks || []).join("；")}</p>
+      </div>
+    `;
+    const head = item.querySelector(".prompt-pack-head");
+    const copyStyle = button("复制 Style", () => copyText(pack.style_prompt));
+    const copyLyrics = button("复制 Lyrics", () => copyText(pack.lyrics_prompt));
+    const copyBoth = button("复制整套", () => copyText(`STYLE PROMPT\n${pack.style_prompt}\n\nLYRICS PROMPT\n${pack.lyrics_prompt}`));
+    head.append(copyStyle, copyLyrics, copyBoth);
+    wrap.append(item);
+  });
+  return wrap;
+}
+
 function renderSongs() {
   const list = $("song-list");
   list.innerHTML = "";
@@ -145,6 +203,12 @@ function artifactCard(artifact, pending = false) {
     <p class="artifact-summary">${artifact.summary || ""}</p>
     <div class="artifact-preview">${shortJson(artifact.content)}</div>
   `;
+  if (artifact.artifact_type === "suno_prompt_pack") {
+    const preview = card.querySelector(".artifact-preview");
+    if (preview) preview.remove();
+    const view = promptPackView(artifact);
+    if (view) card.append(view);
+  }
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
 
