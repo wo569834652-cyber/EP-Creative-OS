@@ -16,7 +16,7 @@ Default retention:
 
 ## `ep_states`
 
-Existing EP state table remains. It stores the single local EP concept.
+Existing EP state table remains. It stores one local EP project. V1 can store multiple EP projects and the frontend selects one active project at a time.
 
 Important fields:
 

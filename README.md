@@ -1,6 +1,6 @@
 # EP Creative OS
 
-EP Creative OS is a local V1 creative production workspace for pushing one concept EP from scattered ideas into usable hooks, Suno prompt packs, generation review logs, and organized production assets.
+EP Creative OS is a local V1 creative production workspace for pushing concept EP projects from scattered ideas into usable hooks, Suno prompt packs, generation review logs, and organized production assets.
 
 The current V1 focus is not a generic CRUD demo. It is a stage-based writing and production flow:
 
@@ -9,6 +9,7 @@ The current V1 focus is not a generic CRUD demo. It is a stage-based writing and
 ## V1 Highlights
 
 - Chinese three-column workspace: song navigator, producer session, artifact/version board
+- Local EP project switcher and new project/new song flow
 - Seed EP: `GROWING UP.EXE`
 - Main acceptance song: `访问失败`
 - Stage-based producer sessions

@@ -28,6 +28,9 @@ V1 uses a three-column workspace.
 Content:
 
 - EP title and one-line concept
+- project selector
+- new project action
+- new song action
 - song list
 - each song's current stage
 - selected song highlight

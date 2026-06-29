@@ -58,8 +58,11 @@ app = FastAPI(title="EP Creative OS", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
-def get_ep_or_404(db: Session) -> EPState:
-    ep = db.scalar(select(EPState).order_by(EPState.id).limit(1))
+def get_ep_or_404(db: Session, ep_id: int | None = None) -> EPState:
+    if ep_id is not None:
+        ep = db.get(EPState, ep_id)
+    else:
+        ep = db.scalar(select(EPState).order_by(EPState.id).limit(1))
     if not ep:
         raise HTTPException(status_code=404, detail="EP state not found")
     return ep
@@ -95,13 +98,13 @@ def stages() -> list[dict]:
 
 
 @app.get("/api/ep", response_model=EPStateRead)
-def read_ep(db: Session = Depends(get_db)) -> EPState:
-    return get_ep_or_404(db)
+def read_ep(ep_id: int | None = None, db: Session = Depends(get_db)) -> EPState:
+    return get_ep_or_404(db, ep_id)
 
 
 @app.put("/api/ep", response_model=EPStateRead)
-def update_ep(payload: EPStateBase, db: Session = Depends(get_db)) -> EPState:
-    ep = get_ep_or_404(db)
+def update_ep(payload: EPStateBase, ep_id: int | None = None, db: Session = Depends(get_db)) -> EPState:
+    ep = get_ep_or_404(db, ep_id)
     for field, value in payload.model_dump().items():
         setattr(ep, field, value)
     db.commit()
@@ -109,9 +112,26 @@ def update_ep(payload: EPStateBase, db: Session = Depends(get_db)) -> EPState:
     return ep
 
 
+@app.get("/api/eps", response_model=list[EPStateRead])
+def list_eps(db: Session = Depends(get_db)) -> list[EPState]:
+    return list(db.scalars(select(EPState).order_by(EPState.id)).all())
+
+
+@app.post("/api/eps", response_model=EPStateRead)
+def create_ep(payload: EPStateBase, db: Session = Depends(get_db)) -> EPState:
+    ep = EPState(**payload.model_dump())
+    db.add(ep)
+    db.commit()
+    db.refresh(ep)
+    return ep
+
+
 @app.get("/api/songs", response_model=list[SongRead])
-def list_songs(db: Session = Depends(get_db)) -> list[Song]:
-    return list(db.scalars(select(Song).order_by(Song.id)).all())
+def list_songs(ep_id: int | None = None, db: Session = Depends(get_db)) -> list[Song]:
+    query = select(Song).order_by(Song.id)
+    if ep_id is not None:
+        query = query.where(Song.ep_id == ep_id)
+    return list(db.scalars(query).all())
 
 
 @app.post("/api/songs", response_model=SongRead)
@@ -159,7 +179,7 @@ def delete_song(song_id: int, db: Session = Depends(get_db)) -> dict:
 @app.post("/api/songs/{song_id}/sessions", response_model=SessionRead)
 def create_session(song_id: int, payload: SessionCreate, db: Session = Depends(get_db)) -> CreativeSession:
     song = get_song_or_404(db, song_id)
-    ep = get_ep_or_404(db)
+    ep = get_ep_or_404(db, song.ep_id)
     stage = payload.stage or song.current_stage
     session = create_session_with_artifacts(
         db,

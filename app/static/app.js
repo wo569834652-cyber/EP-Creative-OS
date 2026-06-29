@@ -1,7 +1,9 @@
 let ep = null;
+let eps = [];
 let songs = [];
 let stages = [];
 let currentSong = null;
+let currentEpId = null;
 let artifacts = [];
 let versions = [];
 let lastSession = null;
@@ -63,6 +65,10 @@ function shortJson(value) {
 function renderSongs() {
   const list = $("song-list");
   list.innerHTML = "";
+  if (!songs.length) {
+    list.innerHTML = `<div class="muted">这个项目还没有歌曲，点击“新建歌曲”开始。</div>`;
+    return;
+  }
   songs.forEach((song) => {
     const item = document.createElement("button");
     item.className = `song-item ${currentSong && currentSong.id === song.id ? "active" : ""}`;
@@ -78,6 +84,18 @@ function renderSongs() {
   });
 }
 
+function renderProjects() {
+  const select = $("project-select");
+  select.innerHTML = "";
+  eps.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.title || `未命名项目 #${item.id}`;
+    option.selected = item.id === currentEpId;
+    select.append(option);
+  });
+}
+
 function renderStageProgress() {
   const box = $("stage-progress");
   box.innerHTML = "";
@@ -90,7 +108,15 @@ function renderStageProgress() {
 }
 
 function fillSongHeader() {
-  if (!currentSong) return;
+  if (!currentSong) {
+    $("song-title").textContent = "新项目";
+    $("song-function").textContent = "还没有歌曲，先新建一首歌。";
+    $("current-stage-label").textContent = "未开始";
+    $("locked-hook").textContent = "未锁定";
+    $("structure-route").textContent = "未选择";
+    $("prompt-pack").textContent = "未选择";
+    return;
+  }
   $("song-title").textContent = currentSong.title;
   $("song-function").textContent = currentSong.function_in_ep || "未填写 EP 功能";
   $("current-stage-label").textContent = stageLabels[currentSong.current_stage] || currentSong.current_stage;
@@ -175,7 +201,13 @@ function renderVersions() {
 }
 
 async function refreshBoard() {
-  if (!currentSong) return;
+  if (!currentSong) {
+    artifacts = [];
+    versions = [];
+    renderArtifacts();
+    renderVersions();
+    return;
+  }
   artifacts = await api(`/api/songs/${currentSong.id}/artifacts`);
   versions = await api(`/api/songs/${currentSong.id}/versions`);
   renderArtifacts();
@@ -183,12 +215,32 @@ async function refreshBoard() {
 }
 
 async function loadAll() {
-  ep = await api("/api/ep");
+  eps = await api("/api/eps");
+  if (!eps.length) {
+    ep = await api("/api/eps", {
+      method: "POST",
+      body: JSON.stringify({
+        title: "新 EP 项目",
+        one_liner: "",
+        core_theme: "",
+        world_view: "",
+        emotional_keywords: [],
+        aesthetic_keywords: [],
+        sonic_layers: {},
+        narrative_arc: "",
+        song_list: [],
+      }),
+    });
+    eps = await api("/api/eps");
+  }
+  currentEpId = currentEpId || (ep && ep.id) || eps.find((item) => item.title === "GROWING UP.EXE")?.id || eps[0].id;
+  ep = await api(`/api/ep?ep_id=${currentEpId}`);
   stages = await api("/api/stages");
-  songs = await api("/api/songs");
-  currentSong = currentSong ? songs.find((song) => song.id === currentSong.id) || songs[0] : songs.find((song) => song.title === "访问失败") || songs[0];
+  songs = await api(`/api/songs?ep_id=${currentEpId}`);
+  currentSong = currentSong ? songs.find((song) => song.id === currentSong.id) || songs[0] || null : songs.find((song) => song.title === "访问失败") || songs[0] || null;
   $("ep-title").textContent = ep.title;
   $("ep-line").textContent = ep.one_liner || "";
+  renderProjects();
   renderSongs();
   renderStageProgress();
   fillSongHeader();
@@ -201,6 +253,84 @@ async function selectSong(id) {
   renderStageProgress();
   fillSongHeader();
   await refreshBoard();
+}
+
+async function selectProject(id) {
+  currentEpId = Number(id);
+  currentSong = null;
+  await loadAll();
+}
+
+async function createProject() {
+  const name = window.prompt("新项目名称", "Untitled EP");
+  if (!name) return;
+  ep = await api("/api/eps", {
+    method: "POST",
+    body: JSON.stringify({
+      title: name,
+      one_liner: "新的 EP 创作项目",
+      core_theme: "",
+      world_view: "",
+      emotional_keywords: [],
+      aesthetic_keywords: [],
+      sonic_layers: {},
+      narrative_arc: "",
+      song_list: [],
+    }),
+  });
+  currentEpId = ep.id;
+  currentSong = await api("/api/songs", {
+    method: "POST",
+    body: JSON.stringify({
+      ep_id: currentEpId,
+      title: "新歌草稿",
+      function_in_ep: "待定义",
+      concept: "",
+      emotional_goal: "",
+      bpm: 92,
+      genre_direction: "",
+      language_plan: "",
+      lyrics: "",
+      style_prompt: "",
+      lyrics_prompt: "",
+      notes: "",
+      current_stage: "diagnosis",
+      stage_status: "not_started",
+      locked_hook: "",
+      current_structure_route: "",
+      current_prompt_pack_id: null,
+    }),
+  });
+  await loadAll();
+  toast("新项目已创建");
+}
+
+async function createSong() {
+  if (!currentEpId) return;
+  currentSong = await api("/api/songs", {
+    method: "POST",
+    body: JSON.stringify({
+      ep_id: currentEpId,
+      title: "新歌草稿",
+      function_in_ep: "待定义",
+      concept: "",
+      emotional_goal: "",
+      bpm: 92,
+      genre_direction: "",
+      language_plan: "",
+      lyrics: "",
+      style_prompt: "",
+      lyrics_prompt: "",
+      notes: "",
+      current_stage: "diagnosis",
+      stage_status: "not_started",
+      locked_hook: "",
+      current_structure_route: "",
+      current_prompt_pack_id: null,
+    }),
+  });
+  await loadAll();
+  toast("新歌曲已创建");
 }
 
 async function runStage() {
@@ -337,6 +467,9 @@ $("refresh-board").onclick = () => refreshBoard().catch((err) => toast(err.messa
 $("open-archive").onclick = () => $("archive-drawer").classList.add("open");
 $("close-archive").onclick = () => $("archive-drawer").classList.remove("open");
 $("save-song").onclick = () => saveSong().catch((err) => toast(err.message));
+$("project-select").onchange = (event) => selectProject(event.target.value).catch((err) => toast(err.message));
+$("new-project").onclick = () => createProject().catch((err) => toast(err.message));
+$("new-song").onclick = () => createSong().catch((err) => toast(err.message));
 
 loadAll().catch((err) => {
   console.error(err);

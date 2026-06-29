@@ -92,6 +92,23 @@ button,
   font-size: 20px;
 }
 
+.project-tools {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.project-label {
+  color: #aeb5bc;
+  font-size: 12px;
+}
+
+.project-tools select {
+  color: #f5f1e8;
+  background: #191c20;
+  border-color: #343941;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: #7bbfb4;
@@ -117,6 +134,18 @@ button,
   margin-bottom: 8px;
   color: #cad0d6;
   font-size: 12px;
+}
+
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.section-row .section-title {
+  margin-bottom: 0;
 }
 
 .song-list {

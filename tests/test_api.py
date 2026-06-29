@@ -41,6 +41,57 @@ def test_seed_ep_and_access_failed_song(client, access_song):
     assert access_song["current_stage"] == "diagnosis"
 
 
+def test_can_create_local_ep_project_and_filter_songs(client):
+    created_ep = client.post(
+        "/api/eps",
+        json={
+            "title": "TEST EP",
+            "one_liner": "测试新建项目",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    )
+    assert created_ep.status_code == 200
+    ep_id = created_ep.json()["id"]
+
+    created_song = client.post(
+        "/api/songs",
+        json={
+            "ep_id": ep_id,
+            "title": "TEST SONG",
+            "function_in_ep": "测试歌曲",
+            "concept": "",
+            "emotional_goal": "",
+            "bpm": 92,
+            "genre_direction": "",
+            "language_plan": "",
+            "lyrics": "",
+            "style_prompt": "",
+            "lyrics_prompt": "",
+            "notes": "",
+            "current_stage": "diagnosis",
+            "stage_status": "not_started",
+            "locked_hook": "",
+            "current_structure_route": "",
+            "current_prompt_pack_id": None,
+        },
+    )
+    assert created_song.status_code == 200
+
+    filtered = client.get(f"/api/songs?ep_id={ep_id}")
+    assert filtered.status_code == 200
+    titles = [song["title"] for song in filtered.json()]
+    assert titles == ["TEST SONG"]
+
+    eps = client.get("/api/eps")
+    assert any(item["title"] == "TEST EP" for item in eps.json())
+
+
 def test_v1_session_creates_pending_artifact(client, access_song):
     response = client.post(
         f"/api/songs/{access_song['id']}/sessions",

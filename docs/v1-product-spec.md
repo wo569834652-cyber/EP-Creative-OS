@@ -8,7 +8,7 @@ The product is not a generic chat app, not a backend API checklist, and not a fa
 
 ## V1 Boundary
 
-V1 supports one local EP workspace. It does not support multi-user accounts, cloud sync, multi-EP project management, real audio analysis, or native Cubase `.cpr` generation.
+V1 supports multiple local EP projects in SQLite, with one active project selected in the workspace. It does not support multi-user accounts, cloud sync, team-level project management, real audio analysis, or native Cubase `.cpr` generation.
 
 V1 must support the full path:
 
@@ -126,7 +126,7 @@ Only accepted and locked artifacts enter the durable creative record. Locked art
 
 The frontend is a Chinese workspace:
 
-- Left: song list and stage status.
+- Left: EP project selector, song list, and stage status.
 - Center: current stage producer session and pending artifacts.
 - Right: accepted artifacts, locked milestones, versions, and current working material.
 - Drawer: advanced song archive/form editor.
@@ -156,6 +156,8 @@ V1 asset export includes:
 Manual frontend acceptance:
 
 - Open the homepage and see a Chinese V1 workspace.
+- Create a new local EP project and see it selected.
+- Create a new song inside that project.
 - Select `访问失败`.
 - See current stage status.
 - Start the current stage.
@@ -171,6 +173,8 @@ Automated API acceptance:
 
 - Health endpoint returns ok.
 - Seed data includes `访问失败`.
+- EP projects can be listed and created.
+- Song list can be filtered by EP project.
 - Song stage can be updated with user confirmation.
 - Session endpoint returns structured artifacts.
 - Artifact accept/lock/discard transitions work.

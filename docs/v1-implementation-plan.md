@@ -60,6 +60,8 @@ Implement deterministic prompt pack builder:
 Required V1 APIs:
 
 - `GET /api/health`
+- `GET /api/eps`
+- `POST /api/eps`
 - `GET /api/ep`
 - `PUT /api/ep`
 - `GET /api/songs`
