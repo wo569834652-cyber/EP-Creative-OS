@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EP Creative OS V1</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315776e'/%3E%3Cpath d='M19 44V17h26v6H27v5h15v6H27v4h19v6H19z' fill='%23fffaf0'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -16,7 +17,7 @@
           <div class="project-tools">
             <label class="project-label">当前项目</label>
             <select id="project-select"></select>
-            <button id="new-project" class="mini-button">新建项目</button>
+            <button id="new-project" class="mini-button">新建 EP</button>
           </div>
         </div>
 
@@ -44,10 +45,23 @@
 
         <section class="stage-progress" id="stage-progress"></section>
 
+        <section class="stage-guide" id="stage-guide">
+          <div>
+            <p class="eyebrow">当前步骤</p>
+            <h3 id="stage-guide-title">歌曲诊断</h3>
+            <p id="stage-guide-description">判断这首歌在 EP 里的作用和下一步要解决的问题。</p>
+          </div>
+          <div>
+            <div class="guide-label">完成条件</div>
+            <ul id="stage-guide-checklist"></ul>
+          </div>
+          <div class="stage-guide-status" id="stage-guide-status">先生成本阶段建议。</div>
+        </section>
+
         <section class="session-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Producer Session</p>
+              <p class="eyebrow">制作会话</p>
               <h3>当前阶段推进</h3>
             </div>
             <select id="output-mode">
@@ -67,9 +81,9 @@
           </label>
 
           <div class="button-row">
-            <button id="run-stage" class="strong-button">运行当前阶段</button>
-            <button id="confirm-next" class="ghost-button">确认进入下一阶段</button>
-            <button id="make-suno" class="ghost-button">生成 Suno Prompt 包</button>
+            <button id="run-stage" class="strong-button">生成本阶段建议</button>
+            <button id="confirm-next" class="ghost-button">进入下一阶段</button>
+            <button id="make-suno" class="ghost-button">生成可复制到 Suno 的提示词</button>
           </div>
 
           <div id="assistant-message" class="assistant-message">还没有会话，先运行当前阶段。</div>
@@ -77,7 +91,10 @@
 
         <section class="pending-panel">
           <div class="panel-heading">
-            <h3>待确认 Artifact</h3>
+            <div>
+              <h3>待确认创作产物</h3>
+              <p class="panel-note">先处理这里的内容，再推进下一阶段。</p>
+            </div>
             <span id="pending-count" class="counter">0</span>
           </div>
           <div id="pending-artifacts" class="artifact-list"></div>
@@ -86,28 +103,28 @@
         <section class="review-panel">
           <div class="panel-heading">
             <h3>生成复盘</h3>
-            <span class="muted">文本反馈 + 打分 + 素材归档</span>
+            <span class="muted">记录 Suno 结果，决定下一轮改哪里</span>
           </div>
           <div class="review-grid">
-            <label class="field-label">Take 名称 <input id="review-take" value="Suno take 01" /></label>
-            <label class="field-label">Hook 准确度 <input id="score-hook" type="number" min="1" max="5" value="3" /></label>
-            <label class="field-label">风格准确度 <input id="score-style" type="number" min="1" max="5" value="3" /></label>
-            <label class="field-label">段落结构 <input id="score-section" type="number" min="1" max="5" value="3" /></label>
-            <label class="field-label">咬字可唱 <input id="score-diction" type="number" min="1" max="5" value="3" /></label>
-            <label class="field-label">情绪贴合 <input id="score-emotion" type="number" min="1" max="5" value="3" /></label>
-            <label class="field-label">制作可用 <input id="score-production" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">这次生成的名称 <input id="review-take" value="Suno take 01" /></label>
+            <label class="field-label">Hook 准确度 <small>1=没唱清，5=很清楚</small><input id="score-hook" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">风格准确度 <small>1=跑偏，5=贴近</small><input id="score-style" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">段落结构 <small>1=混乱，5=清楚</small><input id="score-section" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">咬字可唱 <small>1=拗口，5=自然</small><input id="score-diction" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">情绪贴合 <small>1=不对，5=贴合</small><input id="score-emotion" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">制作可用 <small>1=难用，5=可继续制作</small><input id="score-production" type="number" min="1" max="5" value="3" /></label>
           </div>
           <label class="field-label">听感反馈 <textarea id="review-feedback" placeholder="描述这版哪里偏了：Hook、风格、段落、咬字、情绪或制作可用性。"></textarea></label>
           <div class="button-row">
-            <button id="save-review" class="ghost-button">保存复盘</button>
-            <label class="file-button">上传素材<input id="asset-file" type="file" /></label>
+            <button id="save-review" class="ghost-button">保存本次生成记录</button>
+            <label class="file-button">上传 Suno 音频/MIDI<input id="asset-file" type="file" /></label>
           </div>
         </section>
       </main>
 
       <aside class="board">
         <section class="board-card current-card">
-          <p class="eyebrow">Current</p>
+          <p class="eyebrow">当前采用</p>
           <div class="current-line"><span>锁定 Hook</span><strong id="locked-hook">未锁定</strong></div>
           <div class="current-line"><span>结构路线</span><strong id="structure-route">未选择</strong></div>
           <div class="current-line"><span>Prompt 包</span><strong id="prompt-pack">未选择</strong></div>
@@ -115,7 +132,7 @@
 
         <section class="board-card">
           <div class="panel-heading">
-            <h3>版本与 Artifact</h3>
+            <h3>已保存的创作产物</h3>
             <button id="refresh-board" class="mini-button">刷新</button>
           </div>
           <div id="accepted-artifacts" class="artifact-list"></div>
@@ -125,6 +142,12 @@
           <h3>版本记录</h3>
           <div id="versions" class="version-list"></div>
         </section>
+
+        <section class="board-card">
+          <h3>已上传素材</h3>
+          <p class="panel-note">这些文件会进入制作资料包。</p>
+          <div id="asset-list" class="asset-list"></div>
+        </section>
       </aside>
     </div>
 
@@ -132,13 +155,13 @@
       <div class="drawer-panel">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Advanced Edit</p>
+            <p class="eyebrow">档案编辑</p>
             <h3>歌曲档案</h3>
           </div>
           <button id="close-archive" class="mini-button">关闭</button>
         </div>
         <label class="field-label">标题 <input id="edit-title" /></label>
-        <label class="field-label">EP 功能 <textarea id="edit-function"></textarea></label>
+        <label class="field-label">这首歌在 EP 里的作用 <textarea id="edit-function"></textarea></label>
         <label class="field-label">概念 <textarea id="edit-concept"></textarea></label>
         <label class="field-label">情绪目标 <input id="edit-emotion" /></label>
         <label class="field-label">BPM <input id="edit-bpm" type="number" min="40" max="220" /></label>
@@ -147,6 +170,39 @@
         <label class="field-label">歌词 <textarea id="edit-lyrics" class="tall"></textarea></label>
         <label class="field-label">备注 <textarea id="edit-notes"></textarea></label>
         <button id="save-song" class="strong-button full-width">保存档案</button>
+      </div>
+    </div>
+
+    <div id="project-modal" class="modal" aria-hidden="true">
+      <div class="modal-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">新建 EP</p>
+            <h3>先给项目一个清楚的起点</h3>
+          </div>
+          <button id="close-project-modal" class="mini-button">关闭</button>
+        </div>
+        <label class="field-label">EP 名称 <input id="new-ep-title" value="Untitled EP" /></label>
+        <label class="field-label">一句话概念 <input id="new-ep-line" placeholder="例如：一张关于失眠和旧聊天记录的卧室 EP" /></label>
+        <label class="field-label">第一首歌名 <input id="new-ep-first-song" value="新歌草稿" /></label>
+        <button id="create-project-submit" class="strong-button full-width">创建项目并开始第一首歌</button>
+      </div>
+    </div>
+
+    <div id="song-modal" class="modal" aria-hidden="true">
+      <div class="modal-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">新建歌曲</p>
+            <h3>给制作人一点必要信息</h3>
+          </div>
+          <button id="close-song-modal" class="mini-button">关闭</button>
+        </div>
+        <label class="field-label">歌名 <input id="new-song-title" value="新歌草稿" /></label>
+        <label class="field-label">这首歌在 EP 里的作用 <textarea id="new-song-function" placeholder="例如：开场曲，负责把听众带进通勤后的精神残影。"></textarea></label>
+        <label class="field-label">核心画面 / 情绪 <textarea id="new-song-concept" placeholder="写一两句你现在有的画面、情绪或歌词碎片。"></textarea></label>
+        <label class="field-label">风格参考 <input id="new-song-genre" placeholder="例如：minimal alt pop / moody R&B" /></label>
+        <button id="create-song-submit" class="strong-button full-width">创建歌曲并开始诊断</button>
       </div>
     </div>
 

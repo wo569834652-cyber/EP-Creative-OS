@@ -278,6 +278,14 @@ def set_current_artifact(artifact_id: int, db: Session = Depends(get_db)) -> Art
 @app.post("/api/songs/{song_id}/stage/confirm", response_model=SongRead)
 def confirm_stage(song_id: int, payload: StageConfirmRequest, db: Session = Depends(get_db)) -> Song:
     song = get_song_or_404(db, song_id)
+    pending_count = db.scalar(
+        select(CreativeArtifact)
+        .where(CreativeArtifact.song_id == song.id)
+        .where(CreativeArtifact.status == "pending")
+        .limit(1)
+    )
+    if pending_count:
+        raise HTTPException(status_code=409, detail="还有待确认创作产物。请先保存、不采用或设为当前，再进入下一阶段。")
     song.current_stage = payload.next_stage
     song.stage_status = "confirmed"
     create_version(db, song, "full", f"进入阶段：{STAGE_LABELS.get(payload.next_stage, payload.next_stage)}")

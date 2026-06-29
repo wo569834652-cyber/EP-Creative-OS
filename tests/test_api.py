@@ -107,6 +107,18 @@ def test_v1_session_creates_pending_artifact(client, access_song):
     assert data["artifacts"]
     assert data["artifacts"][0]["status"] == "pending"
     assert data["stage_recommendation"]["next_stage"] == "hook_lab"
+    client.post(f"/api/artifacts/{data['artifacts'][0]['id']}/discard")
+
+
+def test_stage_confirm_blocks_when_artifacts_are_pending(client, access_song):
+    session = client.post(f"/api/songs/{access_song['id']}/sessions", json={}).json()
+    artifact_id = session["artifacts"][0]["id"]
+
+    blocked = client.post(f"/api/songs/{access_song['id']}/stage/confirm", json={"next_stage": "hook_lab"})
+    assert blocked.status_code == 409
+    assert "待确认" in blocked.json()["detail"]
+
+    client.post(f"/api/artifacts/{artifact_id}/discard")
 
 
 def test_artifact_accept_lock_and_stage_confirm(client, access_song):

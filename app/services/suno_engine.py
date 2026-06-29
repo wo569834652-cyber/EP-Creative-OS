@@ -17,7 +17,10 @@ def _base_hook(song: Song) -> str:
         return song.locked_hook
     if "访问失败" in song.title:
         return "access denied"
-    return "我听见回音"
+    title = (song.title or "").strip()
+    if title:
+        return title if len(title) <= 12 else title[:12]
+    return "别停下"
 
 
 def _quality_checks(style_prompt: str, lyrics_prompt: str, hook: str) -> list[dict]:
