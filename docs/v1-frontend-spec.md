@@ -47,6 +47,7 @@ Content:
 
 - selected song header
 - stage progress
+- current-stage guide with completion conditions and readiness status
 - stage goal
 - output mode selector
 - user goal/message input
@@ -57,6 +58,7 @@ Content:
 Primary purpose:
 
 - run the current stage
+- understand why the current stage exists
 - review AI output
 - accept/discard artifacts
 - confirm stage advancement
@@ -131,19 +133,33 @@ Frontend display maps them:
 
 Pending card:
 
-- `接受`
-- `锁定`
-- `丢弃`
-- `设为当前`
+- `保存为可用版本`
+- `不采用`
+- `锁定为关键版本`
+- `设为当前...`
 
 Accepted card:
 
-- `锁定`
-- `设为当前`
+- `锁定为关键版本`
+- `设为当前...`
 
 Locked card:
 
 - show persistent milestone styling
+
+Suno prompt pack cards:
+
+- recommended pack expanded by default
+- alternate and experimental packs collapsed by default
+- visible `Style Prompt`
+- visible `Lyrics Prompt`
+- copy actions for each prompt and for the recommended full pack
+
+Stage advancement:
+
+- if pending artifacts exist, `进入下一阶段` must be blocked
+- the block must be enforced in both frontend and backend
+- the user-facing message must explain that pending outputs must be saved, discarded, locked, or set current first
 
 ## Design QA
 
@@ -155,6 +171,8 @@ Implementation must be checked in browser with:
 - no overlapping controls
 - clear three-column hierarchy
 - readable artifact cards
+- visible prompt outputs after generating a Suno prompt pack
+- no horizontal overflow on mobile width
 
 Use browser QA tooling rather than relying only on code inspection.
 
@@ -190,6 +208,8 @@ Typography:
 Must include Chinese states:
 
 - `还没有会话，先运行当前阶段。`
-- `这个 Artifact 已丢弃。`
+- `还没有待确认内容。运行当前阶段后会出现在这里。`
+- `有 1 个待确认产物，先保存或不采用。`
+- `请先处理待确认创作产物，再进入下一阶段`
 - `DeepSeek API key 未配置，本地功能仍可使用。`
 - `素材包导出失败，请检查文件是否仍存在。`
