@@ -203,6 +203,49 @@ def test_stage_confirm_blocks_when_artifacts_are_pending(client, access_song):
     client.post(f"/api/artifacts/{artifact_id}/discard")
 
 
+def test_stage_confirm_requires_current_stage_artifact(client):
+    ep = client.post(
+        "/api/eps",
+        json={
+            "title": "STAGE GUARD EP",
+            "one_liner": "测试阶段门禁",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    ).json()
+    song = client.post(
+        "/api/songs",
+        json={
+            "ep_id": ep["id"],
+            "title": "STAGE GUARD SONG",
+            "function_in_ep": "",
+            "concept": "",
+            "emotional_goal": "",
+            "bpm": 92,
+            "genre_direction": "",
+            "language_plan": "",
+            "lyrics": "",
+            "style_prompt": "",
+            "lyrics_prompt": "",
+            "notes": "",
+            "current_stage": "hook_lab",
+            "stage_status": "not_started",
+            "locked_hook": "",
+            "current_structure_route": "",
+            "current_prompt_pack_id": None,
+        },
+    ).json()
+
+    blocked = client.post(f"/api/songs/{song['id']}/stage/confirm", json={"next_stage": "structure_lab"})
+    assert blocked.status_code == 409
+    assert "还没有已保存" in blocked.json()["detail"]
+
+
 def test_artifact_accept_lock_and_stage_confirm(client, access_song):
     session = client.post(f"/api/songs/{access_song['id']}/sessions", json={}).json()
     artifact_id = session["artifacts"][0]["id"]

@@ -37,6 +37,12 @@ button,
   cursor: pointer;
 }
 
+button:disabled,
+.file-button:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .app-shell {
   height: 100vh;
   min-height: 100vh;
@@ -522,6 +528,20 @@ textarea.tall {
   color: var(--muted);
 }
 
+.prompt-pack-head .prompt-source-ok,
+.prompt-pack-head .prompt-source-warn {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prompt-pack-head .prompt-source-ok {
+  color: var(--active);
+}
+
+.prompt-pack-head .prompt-source-warn {
+  color: var(--pending);
+}
+
 .board .prompt-pack-head p,
 .board .prompt-notes p {
   color: #c7ccd1;
@@ -727,6 +747,12 @@ textarea.tall {
 
   .sidebar {
     max-height: none;
+  }
+
+  .sidebar .song-list {
+    max-height: 260px;
+    overflow-y: auto;
+    padding-right: 2px;
   }
 
   .topbar,

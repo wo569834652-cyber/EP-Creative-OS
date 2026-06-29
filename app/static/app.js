@@ -8,6 +8,10 @@ let artifacts = [];
 let versions = [];
 let assets = [];
 let lastSession = null;
+let stageRunning = false;
+let sunoRunning = false;
+let reviewSaving = false;
+let bundleExporting = false;
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,6 +46,33 @@ const stageActionHints = {
   generation_review: "记录一版 Suno 结果，系统会指出下一轮改哪里。",
   asset_organizer: "检查歌词、Prompt、复盘和上传文件，然后导出制作资料包。",
 };
+
+const stageRequiredArtifact = {
+  diagnosis: "diagnosis",
+  hook_lab: "hook_set",
+  structure_lab: "structure_route",
+  lyrics_draft: "lyrics_draft",
+  suno_prompt_lab: "suno_prompt_pack",
+};
+
+function pendingArtifactsForCurrentStage() {
+  const required = stageRequiredArtifact[currentSong?.current_stage];
+  return artifacts.filter((item) => item.status === "pending" && (!required || item.artifact_type === required));
+}
+
+function acceptedArtifactsForCurrentStage() {
+  const required = stageRequiredArtifact[currentSong?.current_stage];
+  if (!required) return [];
+  return artifacts.filter((item) => item.artifact_type === required && item.status === "accepted");
+}
+
+function nextStageForCurrentSong() {
+  if (!currentSong) return null;
+  if (lastSession?.stage === currentSong.current_stage) {
+    return lastSession.stage_recommendation?.next_stage || nextStageKey(currentSong.current_stage);
+  }
+  return nextStageKey(currentSong.current_stage);
+}
 
 async function api(path, options = {}) {
   const headers = options.body instanceof FormData ? options.headers || {} : { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -121,6 +152,9 @@ function promptPackView(artifact) {
         <div>
           <strong>${pack.variant}${pack.recommended ? " / 推荐" : ""}</strong>
           <p>${pack.recommendation_reason || ""}</p>
+          <p class="${pack.lyrics_source === "accepted_song_lyrics" ? "prompt-source-ok" : "prompt-source-warn"}">
+            ${pack.lyrics_source === "accepted_song_lyrics" ? "Lyrics Prompt 已包含当前已接受歌词" : "Lyrics Prompt 仍是临时结构模板，请先接受歌词草稿后重新生成"}
+          </p>
         </div>
         <div class="prompt-pack-actions"></div>
       </div>
@@ -209,9 +243,9 @@ function renderStageGuide() {
     li.textContent = item;
     list.append(li);
   });
-  const pendingCount = artifacts.filter((item) => item.status === "pending").length;
-  const acceptedCount = artifacts.filter((item) => item.status === "accepted" || item.locked).length;
-  const next = nextStageKey(currentSong?.current_stage);
+  const pendingCount = pendingArtifactsForCurrentStage().length;
+  const acceptedCount = acceptedArtifactsForCurrentStage().length;
+  const next = nextStageForCurrentSong();
   if (!currentSong) {
     $("stage-guide-status").textContent = "先新建一首歌。";
   } else if (pendingCount) {
@@ -544,18 +578,34 @@ async function submitSong() {
 }
 
 async function runStage() {
-  if (!currentSong) return;
-  lastSession = await api(`/api/songs/${currentSong.id}/sessions`, {
-    method: "POST",
-    body: JSON.stringify({
-      output_mode: $("output-mode").value,
-      user_goal: $("session-goal").value,
-      user_message: $("session-message").value,
-    }),
-  });
-  $("assistant-message").textContent = lastSession.assistant_message;
-  await refreshBoard();
-  toast("当前阶段已生成待确认 Artifact");
+  if (!currentSong || stageRunning) return;
+  if (pendingArtifactsForCurrentStage().length) {
+    toast("请先处理本阶段待确认创作产物");
+    return;
+  }
+  stageRunning = true;
+  const buttonEl = $("run-stage");
+  const originalLabel = buttonEl.textContent;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "AI 正在生成...";
+  $("assistant-message").textContent = "正在调用 AI 推进当前阶段。歌词、结构和复盘阶段可能需要几十秒，请稍等。";
+  try {
+    lastSession = await api(`/api/songs/${currentSong.id}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        output_mode: $("output-mode").value,
+        user_goal: $("session-goal").value,
+        user_message: $("session-message").value,
+      }),
+    });
+    $("assistant-message").textContent = lastSession.assistant_message;
+    await refreshBoard();
+    toast("当前阶段已生成待确认创作产物");
+  } finally {
+    stageRunning = false;
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
+  }
 }
 
 async function confirmNext() {
@@ -565,7 +615,11 @@ async function confirmNext() {
     toast("请先处理待确认创作产物，再进入下一阶段");
     return;
   }
-  const next = lastSession?.stage_recommendation?.next_stage || nextStageKey(currentSong.current_stage);
+  if (stageRequiredArtifact[currentSong.current_stage] && !acceptedArtifactsForCurrentStage().length) {
+    toast("请先生成并保存本阶段创作产物");
+    return;
+  }
+  const next = nextStageForCurrentSong();
   if (!next) {
     toast("没有可推进的下一阶段");
     return;
@@ -579,6 +633,7 @@ async function confirmNext() {
   renderStageProgress();
   fillSongHeader();
   await refreshBoard();
+  lastSession = null;
   toast(`已进入：${stageLabels[next] || next}`);
 }
 
@@ -590,7 +645,7 @@ function nextStageKey(stage) {
 }
 
 async function makeSuno() {
-  if (!currentSong) return;
+  if (!currentSong || sunoRunning) return;
   const missing = [];
   if (!currentSong.locked_hook) missing.push("Hook");
   if (!currentSong.current_structure_route) missing.push("结构路线");
@@ -600,10 +655,21 @@ async function makeSuno() {
     toast("暂不生成：先补齐前置材料");
     return;
   }
-  const data = await api(`/api/songs/${currentSong.id}/suno-prompt-packs`, { method: "POST", body: "{}" });
-  $("assistant-message").textContent = `已生成 ${data.packs.length} 套 Suno Prompt Pack，推荐：${data.recommended_variant}`;
-  await refreshBoard();
-  toast("Suno Prompt 包已生成");
+  sunoRunning = true;
+  const buttonEl = $("make-suno");
+  const originalLabel = buttonEl.textContent;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "正在生成 Prompt...";
+  try {
+    const data = await api(`/api/songs/${currentSong.id}/suno-prompt-packs`, { method: "POST", body: "{}" });
+    $("assistant-message").textContent = `已生成 ${data.packs.length} 套 Suno Prompt Pack，推荐：${data.recommended_variant}`;
+    await refreshBoard();
+    toast("Suno Prompt 包已生成");
+  } finally {
+    sunoRunning = false;
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
+  }
 }
 
 async function actArtifact(id, action) {
@@ -617,7 +683,7 @@ async function actArtifact(id, action) {
 }
 
 async function saveReview() {
-  if (!currentSong) return;
+  if (!currentSong || reviewSaving) return;
   const payload = {
     take_name: $("review-take").value,
     text_feedback: $("review-feedback").value,
@@ -628,9 +694,21 @@ async function saveReview() {
     emotional_fit: Number($("score-emotion").value),
     production_usability: Number($("score-production").value),
   };
-  await api(`/api/songs/${currentSong.id}/generation-reviews`, { method: "POST", body: JSON.stringify(payload) });
-  await refreshBoard();
-  toast("生成复盘已保存");
+  reviewSaving = true;
+  const buttonEl = $("save-review");
+  const originalLabel = buttonEl.textContent;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "正在保存复盘...";
+  try {
+    const artifact = await api(`/api/songs/${currentSong.id}/generation-reviews`, { method: "POST", body: JSON.stringify(payload) });
+    await refreshBoard();
+    $("assistant-message").textContent = `生成复盘已保存：${artifact.summary || artifact.content?.next_revision_advice || payload.take_name}`;
+    toast("生成复盘已保存");
+  } finally {
+    reviewSaving = false;
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
+  }
 }
 
 async function uploadAsset() {
@@ -647,22 +725,36 @@ async function uploadAsset() {
 }
 
 async function exportBundle() {
-  if (!currentSong) return;
-  const response = await fetch(`/api/songs/${currentSong.id}/exports/asset-bundle`, { method: "POST" });
-  if (!response.ok) {
-    toast("素材包导出失败，请检查是否已有可导出的内容");
-    return;
+  if (!currentSong || bundleExporting) return;
+  bundleExporting = true;
+  const buttonEl = $("export-bundle");
+  const originalLabel = buttonEl.textContent;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "正在导出...";
+  toast("正在打包制作资料");
+  try {
+    const response = await fetch(`/api/songs/${currentSong.id}/exports/asset-bundle`, { method: "POST" });
+    if (!response.ok) {
+      const text = await response.text();
+      toast(text || "素材包导出失败，请检查是否已有可导出的内容");
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${currentSong.title || "song"}_asset_bundle.zip`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    $("assistant-message").textContent = "制作资料包已生成下载，包含歌曲档案、歌词、Prompt、复盘、上传素材清单。";
+    toast("制作资料包已开始下载");
+  } finally {
+    bundleExporting = false;
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${currentSong.title || "song"}_asset_bundle.zip`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  toast("制作资料包已开始下载");
 }
 
 async function saveSong() {
@@ -701,7 +793,7 @@ $("confirm-next").onclick = () => confirmNext().catch((err) => toast(err.message
 $("make-suno").onclick = () => makeSuno().catch((err) => toast(err.message));
 $("save-review").onclick = () => saveReview().catch((err) => toast(err.message));
 $("asset-file").onchange = () => uploadAsset().catch((err) => toast(err.message));
-$("export-bundle").onclick = () => exportBundle();
+$("export-bundle").onclick = () => exportBundle().catch((err) => toast(err.message));
 $("refresh-board").onclick = () => refreshBoard().catch((err) => toast(err.message));
 $("open-archive").onclick = () => {
   $("archive-drawer").classList.add("open");

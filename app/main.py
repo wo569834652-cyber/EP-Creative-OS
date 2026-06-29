@@ -46,6 +46,15 @@ from app.services.suno_engine import build_suno_prompt_packs
 from app.services.versioning import create_version, create_version_from_artifact, detect_change_type, snapshot_diff, song_snapshot
 
 
+STAGE_REQUIRED_ARTIFACT = {
+    "diagnosis": "diagnosis",
+    "hook_lab": "hook_set",
+    "structure_lab": "structure_route",
+    "lyrics_draft": "lyrics_draft",
+    "suno_prompt_lab": "suno_prompt_pack",
+}
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -286,6 +295,18 @@ def confirm_stage(song_id: int, payload: StageConfirmRequest, db: Session = Depe
     )
     if pending_count:
         raise HTTPException(status_code=409, detail="还有待确认创作产物。请先保存、不采用或设为当前，再进入下一阶段。")
+    required_artifact = STAGE_REQUIRED_ARTIFACT.get(song.current_stage)
+    if required_artifact:
+        completed_artifact = db.scalar(
+            select(CreativeArtifact)
+            .where(CreativeArtifact.song_id == song.id)
+            .where(CreativeArtifact.artifact_type == required_artifact)
+            .where(CreativeArtifact.status == "accepted")
+            .limit(1)
+        )
+        if not completed_artifact:
+            label = STAGE_LABELS.get(song.current_stage, song.current_stage)
+            raise HTTPException(status_code=409, detail=f"{label}还没有已保存的创作产物。请先生成并保存本阶段产物。")
     song.current_stage = payload.next_stage
     song.stage_status = "confirmed"
     create_version(db, song, "full", f"进入阶段：{STAGE_LABELS.get(payload.next_stage, payload.next_stage)}")
