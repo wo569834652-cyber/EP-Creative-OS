@@ -1,41 +1,49 @@
 from contextlib import asynccontextmanager
-import json
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import Base, SessionLocal, engine, get_db
 from app.llm.deepseek_client import DeepSeekClient
-from app.models import EPState, Song, SongVersion
-from app.prompts.critique_prompt import CRITIQUE_PROMPT
-from app.prompts.hook_prompt import HOOK_PROMPT
+from app.models import AssetFile, CreativeArtifact, CreativeSession, EPState, Song, SongVersion
 from app.prompts.producer_system_prompt import PRODUCER_SYSTEM_PROMPT
-from app.prompts.rewrite_prompt import REWRITE_PROMPT
-from app.prompts.suno_prompt import SUNO_PROMPT
 from app.schemas import (
+    ArtifactActionResponse,
+    AssetFileRead,
     ChatRequest,
     ChatResponse,
+    CreativeArtifactRead,
     DiffResponse,
     EPStateBase,
     EPStateRead,
+    GenerationReviewCreate,
     HookRequest,
     HookResponse,
     ImportResponse,
+    SessionCreate,
+    SessionRead,
     SongCreate,
     SongRead,
     SongUpdate,
+    StageConfirmRequest,
+    StageInfo,
+    SunoPromptPackResponse,
     SunoResponse,
     VersionRead,
 )
 from app.seed import seed_database
+from app.services.assets import create_asset_bundle, store_upload
 from app.services.cubase_export import create_cubase_pack
 from app.services.hooks import generate_hooks
 from app.services.importer import import_suno_file
+from app.services.session_engine import create_session_with_artifacts
+from app.services.stages import STAGE_LABELS, next_stage, stage_metadata
 from app.services.suno import generate_suno_prompt
-from app.services.versioning import create_version, detect_change_type, snapshot_diff, song_snapshot
+from app.services.suno_engine import build_suno_prompt_packs
+from app.services.versioning import create_version, create_version_from_artifact, detect_change_type, snapshot_diff, song_snapshot
 
 
 @asynccontextmanager
@@ -46,7 +54,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="EP Creative OS", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="EP Creative OS", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
@@ -64,6 +72,13 @@ def get_song_or_404(db: Session, song_id: int) -> Song:
     return song
 
 
+def get_artifact_or_404(db: Session, artifact_id: int) -> CreativeArtifact:
+    artifact = db.get(CreativeArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return artifact
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse("app/static/index.html")
@@ -71,7 +86,12 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "version": "1.0.0"}
+
+
+@app.get("/api/stages", response_model=list[StageInfo])
+def stages() -> list[dict]:
+    return stage_metadata()
 
 
 @app.get("/api/ep", response_model=EPStateRead)
@@ -97,7 +117,7 @@ def list_songs(db: Session = Depends(get_db)) -> list[Song]:
 @app.post("/api/songs", response_model=SongRead)
 def create_song(payload: SongCreate, db: Session = Depends(get_db)) -> Song:
     ep_id = payload.ep_id or get_ep_or_404(db).id
-    data = payload.model_dump(exclude={"ep_id"})
+    data = payload.model_dump(exclude={"ep_id", "change_summary"})
     song = Song(ep_id=ep_id, **data)
     db.add(song)
     db.flush()
@@ -136,13 +156,207 @@ def delete_song(song_id: int, db: Session = Depends(get_db)) -> dict:
     return {"deleted": True}
 
 
-def mode_prompt(mode: str) -> str:
-    return {
-        "critique": CRITIQUE_PROMPT,
-        "rewrite": REWRITE_PROMPT,
-        "suno_prompt": SUNO_PROMPT,
-        "hook_generation": HOOK_PROMPT,
-    }.get(mode, "围绕 EP 概念进行创作发散，输出具体可执行建议。")
+@app.post("/api/songs/{song_id}/sessions", response_model=SessionRead)
+def create_session(song_id: int, payload: SessionCreate, db: Session = Depends(get_db)) -> CreativeSession:
+    song = get_song_or_404(db, song_id)
+    ep = get_ep_or_404(db)
+    stage = payload.stage or song.current_stage
+    session = create_session_with_artifacts(
+        db,
+        song,
+        ep,
+        stage,
+        payload.mode,
+        payload.output_mode,
+        payload.user_goal,
+        payload.user_message,
+    )
+    db.commit()
+    return db.scalar(
+        select(CreativeSession)
+        .where(CreativeSession.id == session.id)
+        .options(selectinload(CreativeSession.artifacts))
+    )
+
+
+@app.get("/api/songs/{song_id}/sessions", response_model=list[SessionRead])
+def list_sessions(song_id: int, db: Session = Depends(get_db)) -> list[CreativeSession]:
+    get_song_or_404(db, song_id)
+    return list(
+        db.scalars(
+            select(CreativeSession)
+            .where(CreativeSession.song_id == song_id)
+            .options(selectinload(CreativeSession.artifacts))
+            .order_by(CreativeSession.created_at.desc())
+        ).all()
+    )
+
+
+@app.get("/api/songs/{song_id}/artifacts", response_model=list[CreativeArtifactRead])
+def list_artifacts(song_id: int, db: Session = Depends(get_db)) -> list[CreativeArtifact]:
+    get_song_or_404(db, song_id)
+    return list(
+        db.scalars(
+            select(CreativeArtifact)
+            .where(CreativeArtifact.song_id == song_id)
+            .order_by(CreativeArtifact.locked.desc(), CreativeArtifact.updated_at.desc())
+        ).all()
+    )
+
+
+@app.post("/api/artifacts/{artifact_id}/accept", response_model=ArtifactActionResponse)
+def accept_artifact(artifact_id: int, db: Session = Depends(get_db)) -> ArtifactActionResponse:
+    artifact = get_artifact_or_404(db, artifact_id)
+    artifact.status = "accepted"
+    version = create_version_from_artifact(db, artifact)
+    db.commit()
+    db.refresh(artifact)
+    return ArtifactActionResponse(artifact=artifact, version_id=version.id)
+
+
+@app.post("/api/artifacts/{artifact_id}/lock", response_model=ArtifactActionResponse)
+def lock_artifact(artifact_id: int, db: Session = Depends(get_db)) -> ArtifactActionResponse:
+    artifact = get_artifact_or_404(db, artifact_id)
+    artifact.status = "accepted"
+    artifact.locked = True
+    version = create_version_from_artifact(db, artifact)
+    version.locked = True
+    db.commit()
+    db.refresh(artifact)
+    return ArtifactActionResponse(artifact=artifact, version_id=version.id)
+
+
+@app.post("/api/artifacts/{artifact_id}/discard", response_model=ArtifactActionResponse)
+def discard_artifact(artifact_id: int, db: Session = Depends(get_db)) -> ArtifactActionResponse:
+    artifact = get_artifact_or_404(db, artifact_id)
+    artifact.status = "discarded"
+    artifact.is_current = False
+    db.commit()
+    db.refresh(artifact)
+    return ArtifactActionResponse(artifact=artifact, version_id=None)
+
+
+@app.post("/api/artifacts/{artifact_id}/set-current", response_model=ArtifactActionResponse)
+def set_current_artifact(artifact_id: int, db: Session = Depends(get_db)) -> ArtifactActionResponse:
+    artifact = get_artifact_or_404(db, artifact_id)
+    peers = db.scalars(
+        select(CreativeArtifact)
+        .where(CreativeArtifact.song_id == artifact.song_id)
+        .where(CreativeArtifact.artifact_type == artifact.artifact_type)
+    ).all()
+    for peer in peers:
+        peer.is_current = False
+    artifact.is_current = True
+    if artifact.status == "pending":
+        artifact.status = "accepted"
+    version = create_version_from_artifact(db, artifact)
+    db.commit()
+    db.refresh(artifact)
+    return ArtifactActionResponse(artifact=artifact, version_id=version.id)
+
+
+@app.post("/api/songs/{song_id}/stage/confirm", response_model=SongRead)
+def confirm_stage(song_id: int, payload: StageConfirmRequest, db: Session = Depends(get_db)) -> Song:
+    song = get_song_or_404(db, song_id)
+    song.current_stage = payload.next_stage
+    song.stage_status = "confirmed"
+    create_version(db, song, "full", f"进入阶段：{STAGE_LABELS.get(payload.next_stage, payload.next_stage)}")
+    db.commit()
+    db.refresh(song)
+    return song
+
+
+@app.post("/api/songs/{song_id}/suno-prompt-packs", response_model=SunoPromptPackResponse)
+def create_suno_prompt_packs(song_id: int, db: Session = Depends(get_db)) -> SunoPromptPackResponse:
+    song = get_song_or_404(db, song_id)
+    content = build_suno_prompt_packs(song)
+    artifact = CreativeArtifact(
+        song_id=song.id,
+        artifact_type="suno_prompt_pack",
+        title=f"{song.title} / Suno Prompt 包",
+        summary=f"推荐方案：{content['recommended_variant']}",
+        content=content,
+        is_recommended=True,
+    )
+    db.add(artifact)
+    song.stage_status = "ready_to_advance"
+    db.commit()
+    db.refresh(artifact)
+    return SunoPromptPackResponse(
+        artifact=artifact,
+        packs=content["packs"],
+        recommended_variant=content["recommended_variant"],
+    )
+
+
+@app.post("/api/songs/{song_id}/generation-reviews", response_model=CreativeArtifactRead)
+def create_generation_review(song_id: int, payload: GenerationReviewCreate, db: Session = Depends(get_db)) -> CreativeArtifact:
+    song = get_song_or_404(db, song_id)
+    scores = {
+        "hook_accuracy": payload.hook_accuracy,
+        "style_accuracy": payload.style_accuracy,
+        "section_structure": payload.section_structure,
+        "diction_singability": payload.diction_singability,
+        "emotional_fit": payload.emotional_fit,
+        "production_usability": payload.production_usability,
+    }
+    lowest = min(scores, key=scores.get)
+    revision_map = {
+        "hook_accuracy": "优先缩短 Hook，并在 Lyrics Prompt 中重复标注副歌第一句。",
+        "style_accuracy": "优先修改 Style Prompt 的 groove、drums、instrument palette。",
+        "section_structure": "减少段落标签数量，明确 Chorus 和 Bridge 的功能。",
+        "diction_singability": "缩短中文长句，增加停顿和半唱提示。",
+        "emotional_fit": "调整 vocal direction 和 mood，不要先改曲式。",
+        "production_usability": "降低编曲复杂度，保留更干的主唱和更清楚的节拍。",
+    }
+    content = {
+        "take_name": payload.take_name,
+        "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+        "text_feedback": payload.text_feedback,
+        "scores": scores,
+        "next_revision_target": lowest,
+        "next_revision_advice": revision_map[lowest],
+    }
+    artifact = CreativeArtifact(
+        song_id=song.id,
+        artifact_type="generation_review",
+        title=f"{song.title} / 生成复盘 / {payload.take_name}",
+        summary=revision_map[lowest],
+        content=content,
+        status="accepted",
+        is_recommended=True,
+    )
+    db.add(artifact)
+    db.flush()
+    create_version(db, song, "generation_review", f"记录生成复盘：{payload.take_name}", artifact_ids=[artifact.id])
+    db.commit()
+    db.refresh(artifact)
+    return artifact
+
+
+@app.post("/api/songs/{song_id}/assets", response_model=AssetFileRead)
+async def upload_song_asset(
+    song_id: int,
+    role: str = Form("other"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> AssetFile:
+    song = get_song_or_404(db, song_id)
+    return await store_upload(db, song, file, role)
+
+
+@app.get("/api/songs/{song_id}/assets", response_model=list[AssetFileRead])
+def list_song_assets(song_id: int, db: Session = Depends(get_db)) -> list[AssetFile]:
+    get_song_or_404(db, song_id)
+    return list(db.scalars(select(AssetFile).where(AssetFile.song_id == song_id).order_by(AssetFile.created_at.desc())).all())
+
+
+@app.post("/api/songs/{song_id}/exports/asset-bundle")
+def export_asset_bundle(song_id: int, db: Session = Depends(get_db)) -> FileResponse:
+    song = get_song_or_404(db, song_id)
+    path = create_asset_bundle(db, song)
+    filename = f"{song.title or 'song'}_asset_bundle.zip".replace("/", "_").replace("\\", "_")
+    return FileResponse(path, filename=filename, media_type="application/zip")
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -151,34 +365,25 @@ async def creative_chat(payload: ChatRequest, db: Session = Depends(get_db)) -> 
     if not ep:
         raise HTTPException(status_code=404, detail="EP not found")
     song = db.get(Song, payload.song_id) if payload.song_id else None
-
     context = {
-        "ep": {
-            "title": ep.title,
-            "one_liner": ep.one_liner,
-            "core_theme": ep.core_theme,
-            "sonic_layers": ep.sonic_layers,
-            "narrative_arc": ep.narrative_arc,
-            "song_list": ep.song_list,
-        },
+        "ep_title": ep.title,
         "song": song_snapshot(song) if song else None,
         "mode": payload.mode,
     }
     messages = [
         {"role": "system", "content": PRODUCER_SYSTEM_PROMPT},
-        {"role": "system", "content": mode_prompt(payload.mode)},
-        {"role": "user", "content": f"Context JSON:\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\nUser:\n{payload.user_message}"},
+        {"role": "user", "content": f"Context: {context}\n\nUser: {payload.user_message}"},
     ]
     ok, content = await DeepSeekClient().chat(messages)
     if not ok:
         return ChatResponse(
             assistant_message=content,
-            suggested_actions=["在 .env 中配置 DEEPSEEK_API_KEY", "继续使用本地 Hook / Suno / Cubase 导出功能"],
+            suggested_actions=["配置 DEEPSEEK_API_KEY", "继续使用本地 V1 阶段工作流"],
             extracted_updates={"llm_available": False},
         )
     return ChatResponse(
         assistant_message=content,
-        suggested_actions=["提取可执行修改点", "需要时把歌词或 prompt 保存为新版本"],
+        suggested_actions=["把有用结论保存为 Artifact", "需要时推进当前阶段"],
         extracted_updates={"llm_available": True},
     )
 
@@ -187,9 +392,6 @@ async def creative_chat(payload: ChatRequest, db: Session = Depends(get_db)) -> 
 def hooks(song_id: int, payload: HookRequest, db: Session = Depends(get_db)) -> HookResponse:
     song = get_song_or_404(db, song_id)
     options = generate_hooks(song, payload.hook_goal, payload.style_reference, payload.language_mix, payload.count)
-    song.notes = (song.notes or "") + "\n\nHook Engine:\n" + "\n".join(f"- {item.hook_text} ({item.score})" for item in options)
-    create_version(db, song, "hook", f"Generated {len(options)} hook options")
-    db.commit()
     return HookResponse(hooks=options)
 
 
@@ -199,7 +401,7 @@ def suno(song_id: int, db: Session = Depends(get_db)) -> SunoResponse:
     response = generate_suno_prompt(song)
     song.style_prompt = response.style_prompt
     song.lyrics_prompt = response.lyrics_prompt
-    create_version(db, song, "style", "Generated Suno style and lyrics prompts")
+    create_version(db, song, "suno_prompt", "Generated V1 Suno prompt")
     db.commit()
     return response
 

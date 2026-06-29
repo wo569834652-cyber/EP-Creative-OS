@@ -2,7 +2,13 @@ import os
 from pathlib import Path
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_ep_creative_os.db"
+os.environ["DEEPSEEK_API_KEY"] = ""
+os.environ["DEEPSEEK_MODEL"] = "deepseek-v4-pro"
+os.environ["DEEPSEEK_CONTEXT_WINDOW"] = "1000000"
 Path("test_ep_creative_os.db").unlink(missing_ok=True)
+
+import io
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,43 +22,119 @@ def client():
         yield test_client
 
 
+@pytest.fixture()
+def access_song(client):
+    songs = client.get("/api/songs").json()
+    return next(song for song in songs if song["title"] == "访问失败")
+
+
 def test_health_ok(client):
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
 
-def test_seed_ep_and_songs(client):
+def test_seed_ep_and_access_failed_song(client, access_song):
     ep = client.get("/api/ep")
     assert ep.status_code == 200
     assert ep.json()["title"] == "GROWING UP.EXE"
-
-    songs = client.get("/api/songs")
-    assert songs.status_code == 200
-    assert len(songs.json()) >= 7
+    assert access_song["current_stage"] == "diagnosis"
 
 
-def test_suno_and_cubase_pack_export(client):
-    song_id = client.get("/api/songs").json()[0]["id"]
+def test_v1_session_creates_pending_artifact(client, access_song):
+    response = client.post(
+        f"/api/songs/{access_song['id']}/sessions",
+        json={
+            "output_mode": "stage_fit",
+            "user_goal": "推进访问失败",
+            "user_message": "先诊断这首歌的问题",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stage"] == "diagnosis"
+    assert data["artifacts"]
+    assert data["artifacts"][0]["status"] == "pending"
+    assert data["stage_recommendation"]["next_stage"] == "hook_lab"
 
-    suno = client.post(f"/api/songs/{song_id}/suno")
-    assert suno.status_code == 200
-    assert "Primary genre" in suno.json()["style_prompt"]
 
-    pack = client.post(f"/api/songs/{song_id}/exports/cubase-pack")
-    assert pack.status_code == 200
-    assert pack.headers["content-type"].startswith("application/zip")
-    assert len(pack.content) > 1000
+def test_artifact_accept_lock_and_stage_confirm(client, access_song):
+    session = client.post(f"/api/songs/{access_song['id']}/sessions", json={}).json()
+    artifact_id = session["artifacts"][0]["id"]
+
+    accepted = client.post(f"/api/artifacts/{artifact_id}/accept")
+    assert accepted.status_code == 200
+    assert accepted.json()["artifact"]["status"] == "accepted"
+    assert accepted.json()["version_id"] is not None
+
+    locked = client.post(f"/api/artifacts/{artifact_id}/lock")
+    assert locked.status_code == 200
+    assert locked.json()["artifact"]["locked"] is True
+
+    advanced = client.post(f"/api/songs/{access_song['id']}/stage/confirm", json={"next_stage": "hook_lab"})
+    assert advanced.status_code == 200
+    assert advanced.json()["current_stage"] == "hook_lab"
 
 
-def test_chat_without_key_is_friendly(client):
-    song = client.get("/api/songs").json()[0]
+def test_suno_prompt_packs_are_limited_and_recommended(client, access_song):
+    response = client.post(f"/api/songs/{access_song['id']}/suno-prompt-packs")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["packs"]) <= 3
+    assert data["recommended_variant"] == "primary"
+    assert sum(1 for pack in data["packs"] if pack["recommended"]) == 1
+    style = data["packs"][0]["style_prompt"]
+    assert "BPM" in style
+    assert "Mandarin" not in style
+    assert "Chinese" not in style
+    assert "普通话" not in style
+    assert "中文" not in style
+
+
+def test_generation_review_and_asset_bundle(client, access_song):
+    review = client.post(
+        f"/api/songs/{access_song['id']}/generation-reviews",
+        json={
+            "take_name": "Suno take 01",
+            "text_feedback": "Hook 不够清楚，段落还可以。",
+            "hook_accuracy": 2,
+            "style_accuracy": 4,
+            "section_structure": 4,
+            "diction_singability": 3,
+            "emotional_fit": 4,
+            "production_usability": 3,
+        },
+    )
+    assert review.status_code == 200
+    assert review.json()["artifact_type"] == "generation_review"
+    assert review.json()["content"]["next_revision_target"] == "hook_accuracy"
+
+    upload = client.post(
+        f"/api/songs/{access_song['id']}/assets",
+        data={"role": "suno_midi"},
+        files={"file": ("take.mid", b"MThd\x00\x00\x00\x06\x00\x01\x00\x01\x01\xe0MTrk\x00\x00\x00\x04\x00\xff/\x00", "audio/midi")},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["filename"] == "take.mid"
+
+    bundle = client.post(f"/api/songs/{access_song['id']}/exports/asset-bundle")
+    assert bundle.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
+        names = set(zf.namelist())
+    assert "song.md" in names
+    assert "suno_prompt.md" in names
+    assert "generation_reviews.md" in names
+    assert "assets_manifest.json" in names
+    assert "notes_for_cubase.txt" in names
+
+
+def test_chat_without_key_is_friendly(client, access_song):
     ep = client.get("/api/ep").json()
     response = client.post(
         "/api/chat",
         json={
             "ep_id": ep["id"],
-            "song_id": song["id"],
+            "song_id": access_song["id"],
             "mode": "critique",
             "user_message": "看看副歌方向",
         },

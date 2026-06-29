@@ -16,7 +16,7 @@ class DeepSeekClient:
         if not self.settings.deepseek_api_key:
             return (
                 False,
-                "DeepSeek API key 未配置。请在 .env 中设置 DEEPSEEK_API_KEY；本地 CRUD、Hook、Suno Prompt 和 Cubase 导出仍可继续使用。",
+                "DeepSeek API key 未配置。请在 .env 中设置 DEEPSEEK_API_KEY；本地 CRUD、Hook、Suno Prompt 和素材整理功能仍可继续使用。",
             )
 
         base_url = self.settings.deepseek_base_url.rstrip("/")

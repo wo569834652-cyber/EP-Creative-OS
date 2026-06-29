@@ -3,87 +3,146 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>EP Creative OS</title>
+    <title>EP Creative OS V1</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header>
-      <h1>EP Creative OS</h1>
-      <div id="status">loading</div>
-    </header>
-
-    <main>
-      <section class="panel ep-panel">
-        <h2>EP State</h2>
-        <label>Title <input id="ep-title" /></label>
-        <label>One Liner <textarea id="ep-one-liner"></textarea></label>
-        <label>Core Theme <textarea id="ep-core-theme"></textarea></label>
-        <label>World View <textarea id="ep-world-view"></textarea></label>
-        <label>Emotional Keywords <input id="ep-emotional" /></label>
-        <label>Aesthetic Keywords <input id="ep-aesthetic" /></label>
-        <label>Sonic Layers JSON <textarea id="ep-sonic"></textarea></label>
-        <label>Narrative Arc <textarea id="ep-arc"></textarea></label>
-        <button id="save-ep">Save EP</button>
-      </section>
-
-      <section class="panel songs-panel">
-        <div class="panel-head">
-          <h2>Songs</h2>
-          <button id="new-song">New</button>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-block">
+          <p class="eyebrow">EP Creative OS</p>
+          <h1 id="ep-title">GROWING UP.EXE</h1>
+          <p id="ep-line" class="muted">加载中</p>
         </div>
-        <div id="song-list"></div>
-      </section>
 
-      <section class="panel editor-panel">
-        <h2>Current Song</h2>
-        <label>Title <input id="song-title" /></label>
-        <label>Function <textarea id="song-function"></textarea></label>
-        <label>Concept <textarea id="song-concept"></textarea></label>
-        <label>Emotional Goal <input id="song-emotional" /></label>
-        <label>BPM <input id="song-bpm" type="number" min="40" max="220" /></label>
-        <label>Genre Direction <input id="song-genre" /></label>
-        <label>Language Plan <input id="song-language" /></label>
-        <label>Lyrics <textarea id="song-lyrics" class="tall"></textarea></label>
-        <label>Style Prompt <textarea id="song-style" class="tall"></textarea></label>
-        <label>Lyrics Prompt <textarea id="song-lyrics-prompt" class="tall"></textarea></label>
-        <label>Notes <textarea id="song-notes"></textarea></label>
-        <button id="save-song">Save Song</button>
-      </section>
-
-      <section class="panel tools-panel">
-        <h2>Tools</h2>
-        <div class="button-row">
-          <button id="gen-hooks">Generate Hooks</button>
-          <button id="gen-suno">Generate Suno Prompt</button>
-          <button id="export-pack">Export Cubase Pack</button>
+        <div class="side-section">
+          <div class="section-title">歌曲进度</div>
+          <div id="song-list" class="song-list"></div>
         </div>
-        <label>Hook Goal <input id="hook-goal" value="短、重复、带系统残影的副歌 Hook" /></label>
-        <pre id="tool-output"></pre>
-      </section>
+      </aside>
 
-      <section class="panel chat-panel">
-        <h2>Creative Chat</h2>
-        <label>Mode
-          <select id="chat-mode">
-            <option value="ideation">ideation</option>
-            <option value="critique">critique</option>
-            <option value="rewrite">rewrite</option>
-            <option value="suno_prompt">suno_prompt</option>
-            <option value="direction_fix">direction_fix</option>
-            <option value="hook_generation">hook_generation</option>
-          </select>
-        </label>
-        <textarea id="chat-message" class="tall" placeholder="和制作人顾问讨论这首歌..."></textarea>
-        <button id="send-chat">Send</button>
-        <pre id="chat-output"></pre>
-      </section>
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <div id="current-stage-label" class="stage-chip">歌曲诊断</div>
+            <h2 id="song-title">选择歌曲</h2>
+            <p id="song-function" class="muted">准备进入制作会话</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="open-archive" class="ghost-button">歌曲档案</button>
+            <button id="export-bundle" class="strong-button">导出素材包</button>
+          </div>
+        </header>
 
-      <section class="panel versions-panel">
-        <h2>Versions</h2>
-        <div id="versions"></div>
-      </section>
-    </main>
+        <section class="stage-progress" id="stage-progress"></section>
 
+        <section class="session-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Producer Session</p>
+              <h3>当前阶段推进</h3>
+            </div>
+            <select id="output-mode">
+              <option value="stage_fit">按阶段输出</option>
+              <option value="deep_analysis">深度分析</option>
+              <option value="cards_only">只要行动卡</option>
+            </select>
+          </div>
+
+          <label class="field-label">
+            本轮目标
+            <input id="session-goal" value="推进《访问失败》的当前制作阶段" />
+          </label>
+          <label class="field-label">
+            给制作人的补充
+            <textarea id="session-message" placeholder="例如：我想让 Hook 更冷一点，但不要太像旁白。"></textarea>
+          </label>
+
+          <div class="button-row">
+            <button id="run-stage" class="strong-button">运行当前阶段</button>
+            <button id="confirm-next" class="ghost-button">确认进入下一阶段</button>
+            <button id="make-suno" class="ghost-button">生成 Suno Prompt 包</button>
+          </div>
+
+          <div id="assistant-message" class="assistant-message">还没有会话，先运行当前阶段。</div>
+        </section>
+
+        <section class="pending-panel">
+          <div class="panel-heading">
+            <h3>待确认 Artifact</h3>
+            <span id="pending-count" class="counter">0</span>
+          </div>
+          <div id="pending-artifacts" class="artifact-list"></div>
+        </section>
+
+        <section class="review-panel">
+          <div class="panel-heading">
+            <h3>生成复盘</h3>
+            <span class="muted">文本反馈 + 打分 + 素材归档</span>
+          </div>
+          <div class="review-grid">
+            <label class="field-label">Take 名称 <input id="review-take" value="Suno take 01" /></label>
+            <label class="field-label">Hook 准确度 <input id="score-hook" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">风格准确度 <input id="score-style" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">段落结构 <input id="score-section" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">咬字可唱 <input id="score-diction" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">情绪贴合 <input id="score-emotion" type="number" min="1" max="5" value="3" /></label>
+            <label class="field-label">制作可用 <input id="score-production" type="number" min="1" max="5" value="3" /></label>
+          </div>
+          <label class="field-label">听感反馈 <textarea id="review-feedback" placeholder="描述这版哪里偏了：Hook、风格、段落、咬字、情绪或制作可用性。"></textarea></label>
+          <div class="button-row">
+            <button id="save-review" class="ghost-button">保存复盘</button>
+            <label class="file-button">上传素材<input id="asset-file" type="file" /></label>
+          </div>
+        </section>
+      </main>
+
+      <aside class="board">
+        <section class="board-card current-card">
+          <p class="eyebrow">Current</p>
+          <div class="current-line"><span>锁定 Hook</span><strong id="locked-hook">未锁定</strong></div>
+          <div class="current-line"><span>结构路线</span><strong id="structure-route">未选择</strong></div>
+          <div class="current-line"><span>Prompt 包</span><strong id="prompt-pack">未选择</strong></div>
+        </section>
+
+        <section class="board-card">
+          <div class="panel-heading">
+            <h3>版本与 Artifact</h3>
+            <button id="refresh-board" class="mini-button">刷新</button>
+          </div>
+          <div id="accepted-artifacts" class="artifact-list"></div>
+        </section>
+
+        <section class="board-card">
+          <h3>版本记录</h3>
+          <div id="versions" class="version-list"></div>
+        </section>
+      </aside>
+    </div>
+
+    <div id="archive-drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Advanced Edit</p>
+            <h3>歌曲档案</h3>
+          </div>
+          <button id="close-archive" class="mini-button">关闭</button>
+        </div>
+        <label class="field-label">标题 <input id="edit-title" /></label>
+        <label class="field-label">EP 功能 <textarea id="edit-function"></textarea></label>
+        <label class="field-label">概念 <textarea id="edit-concept"></textarea></label>
+        <label class="field-label">情绪目标 <input id="edit-emotion" /></label>
+        <label class="field-label">BPM <input id="edit-bpm" type="number" min="40" max="220" /></label>
+        <label class="field-label">风格方向 <input id="edit-genre" /></label>
+        <label class="field-label">语言计划 <input id="edit-language" /></label>
+        <label class="field-label">歌词 <textarea id="edit-lyrics" class="tall"></textarea></label>
+        <label class="field-label">备注 <textarea id="edit-notes"></textarea></label>
+        <button id="save-song" class="strong-button full-width">保存档案</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
     <script src="/static/app.js"></script>
   </body>
 </html>
