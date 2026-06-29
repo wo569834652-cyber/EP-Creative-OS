@@ -466,6 +466,12 @@ textarea.tall {
   font-size: 12px;
 }
 
+.artifact-preview.lyrics-preview {
+  max-height: 360px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 .prompt-pack-list {
   display: grid;
   gap: 12px;

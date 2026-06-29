@@ -11,7 +11,8 @@ class DeepSeekClient:
         self,
         messages: list[dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 1200,
+        max_tokens: int = 4096,
+        json_mode: bool = False,
     ) -> tuple[bool, str]:
         if not self.settings.deepseek_api_key:
             return (
@@ -26,13 +27,15 @@ class DeepSeekClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         headers = {
             "Authorization": f"Bearer {self.settings.deepseek_api_key}",
             "Content-Type": "application/json",
         }
 
         try:
-            async with httpx.AsyncClient(timeout=40) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 response = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
@@ -44,6 +47,12 @@ class DeepSeekClient:
             return False, "DeepSeek 返回了无法解析的 JSON。"
 
         try:
-            return True, data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
+            if content.strip():
+                return True, content
+            if message.get("reasoning_content"):
+                return False, "DeepSeek 只返回了 reasoning_content，没有产出最终 content。请提高 max_tokens 或缩短输入。"
+            return False, "DeepSeek 返回了空 content。"
         except (KeyError, IndexError, TypeError):
             return False, "DeepSeek 返回格式不符合 OpenAI-compatible chat completions。"

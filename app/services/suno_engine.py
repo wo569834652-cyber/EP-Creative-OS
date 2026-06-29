@@ -73,11 +73,35 @@ def _pack(song: Song, variant: str, recommended: bool, route: str, mood_shift: s
             ("[Outro]", "Unresolved final fragment."),
         ]
 
-    lyrics_prompt = "\n".join(
-        ["[Global vocal direction]\nClose, restrained, intimate. Keep the hook short and repeatable."]
-        + [f"{label}\n{body}" for label, body in section_map]
-        + ["[Revision target]\nIf the hook is not clear, simplify the chorus first. If the style drifts, adjust groove and instrument palette before changing lyrics."]
-    )
+    if song.lyrics.strip():
+        lyrics_prompt = "\n".join(
+            [
+                "[Use these lyrics as the primary lyric source]",
+                song.lyrics.strip(),
+                "",
+                "[Global vocal direction]",
+                "Close, restrained, intimate. Keep the hook short and repeatable. Preserve the written lyric meaning; do not replace it with generic filler.",
+                "",
+                "[Section delivery notes]",
+            ]
+            + [f"{label}\n{body}" for label, body in section_map]
+            + [
+                "[Revision target]",
+                "If the hook is not clear, simplify the chorus first. If the style drifts, adjust groove and instrument palette before changing lyrics.",
+            ]
+        )
+    else:
+        lyrics_prompt = "\n".join(
+            [
+                "[Lyric drafting mode]",
+                "No accepted full lyric draft is available yet. Use the section notes below as a temporary writing scaffold, not as final lyrics.",
+                "[Global vocal direction]\nClose, restrained, intimate. Keep the hook short and repeatable.",
+            ]
+            + [f"{label}\n{body}" for label, body in section_map]
+            + [
+                "[Revision target]\nIf the hook is not clear, simplify the chorus first. If the style drifts, adjust groove and instrument palette before changing lyrics."
+            ]
+        )
 
     return {
         "variant": variant,
@@ -85,6 +109,7 @@ def _pack(song: Song, variant: str, recommended: bool, route: str, mood_shift: s
         "recommendation_reason": "主线版本最稳，Hook 位置清楚，结构能让 Suno 读懂错误系统的叙事。" if recommended else "作为对照版本，用来测试风格或结构边界。",
         "style_prompt": style_prompt,
         "lyrics_prompt": lyrics_prompt,
+        "lyrics_source": "accepted_song_lyrics" if song.lyrics.strip() else "temporary_structure_scaffold",
         "negative_terms": FORBIDDEN_STYLE_TERMS,
         "hook_delivery_notes": f"Hook `{hook}` 必须短句重复，第一次冷，第二次加轻微叠唱。",
         "section_control_notes": f"结构路线：{route_label}。段落标签服务生成稳定性，不等于固定模板。",

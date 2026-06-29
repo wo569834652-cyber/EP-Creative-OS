@@ -54,6 +54,7 @@ Content:
 - start current stage button
 - AI response
 - pending artifact cards
+- artifact source labels: `AI 生成` or `本地草稿`
 
 Primary purpose:
 
@@ -153,6 +154,7 @@ Suno prompt pack cards:
 - alternate and experimental packs collapsed by default
 - visible `Style Prompt`
 - visible `Lyrics Prompt`
+- accepted lyrics should appear inside `Lyrics Prompt` when available
 - copy actions for each prompt and for the recommended full pack
 
 Stage advancement:

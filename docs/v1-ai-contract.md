@@ -16,6 +16,25 @@ The context window setting is application configuration for budgeting and prompt
 
 The model must not browse the web or research Suno prompting at runtime. Suno prompting methodology is encoded in the application as deterministic rules, templates, validators, and quality checks.
 
+## Stage AI Policy
+
+DeepSeek is the preferred creative engine for the stages where judgment and writing quality matter:
+
+- Diagnosis
+- Hook Lab
+- Structure Lab
+- Lyrics Draft
+- Generation Review
+
+For these stages, the app first asks DeepSeek for strict JSON that matches the stage contract. If the API key is missing, the request fails, or the JSON cannot be parsed, the stage falls back to deterministic local output.
+
+Artifacts must expose their source:
+
+- `source: "ai"` for DeepSeek-generated stage artifacts
+- `source: "local_fallback"` and `fallback: true` for deterministic fallback artifacts
+
+Suno Prompt Lab remains rule-led. It may use accepted AI lyrics as source material, but the prompt methodology is not invented by the model at runtime.
+
 ## Session Response Shape
 
 The API should return human-readable guidance plus structured artifacts.
@@ -113,10 +132,15 @@ Artifact type: `structure_route`.
 
 ## Lyrics Draft
 
+Preferred source: DeepSeek structured generation.
+
+Fallback source: deterministic local draft.
+
 Must respect selected hook and structure route.
 
 Rules:
 
+- output real full lyrics, not a Suno Lyrics Prompt
 - chorus should be short and melodic
 - complex concepts go to verse, bridge, spoken/half-sung sections
 - multilingual material must have function, not translation padding
@@ -125,6 +149,10 @@ Rules:
 Artifact type: `lyrics_draft`.
 
 ## Suno Prompt Lab
+
+Preferred source: deterministic prompt pack engine using accepted song decisions.
+
+If accepted lyrics exist, `lyrics_prompt` must include those lyrics as the primary lyric source before adding vocal, section, and revision notes.
 
 Must produce at most 3 prompt packs:
 

@@ -21,6 +21,20 @@ The current V1 focus is not a generic CRUD demo. It is a stage-based writing and
 - Asset bundle export with markdown notes, lyrics, prompts, reviews, manifest, and uploads
 - DeepSeek OpenAI-compatible client using `deepseek-v4-pro` by default
 
+## AI Involvement
+
+The main production flow now tries to use DeepSeek first in the creative stages where AI can materially move the song forward:
+
+- `歌曲诊断`: AI acts as producer and identifies the song's EP function, biggest problem, risks, and next stage.
+- `Hook 实验室`: AI generates and scores singable Hook candidates.
+- `结构实验室`: AI recommends a stable route and optional innovative routes for the song.
+- `歌词草稿`: AI writes a real full lyric draft. This is not the Suno `Lyrics Prompt`.
+- `生成复盘`: AI reads your Suno feedback and scores, then recommends the next revision target.
+
+If DeepSeek is unavailable or returns invalid structured output, the app falls back to local deterministic drafts and marks the artifact as `本地草稿` in the UI. AI-generated artifacts are marked as `AI 生成`.
+
+`Suno Prompt 实验室` remains rule-led for quality control: it uses the accepted Hook, structure route, and accepted lyrics to build copyable `Style Prompt` and `Lyrics Prompt` packs. The `Lyrics Prompt` includes the accepted song lyrics when available.
+
 ## Run Locally
 
 ```bash
@@ -50,8 +64,9 @@ Open <http://127.0.0.1:8000>.
 3. 点 `生成本阶段建议`。生成结果会进入 `待确认创作产物`，不是直接隐藏到数据库里。
 4. 对每个待确认产物选择 `保存为可用版本`、`不采用`、`锁定为关键版本` 或 `设为当前...`。
 5. 处理完待确认产物后，再点 `进入下一阶段`。
-6. 到 `Suno Prompt 实验室` 后点 `生成可复制到 Suno 的提示词`。系统最多生成三套，默认推荐 `primary`，并直接显示 `Style Prompt`、`Lyrics Prompt` 和复制按钮。
-7. 在 Suno 生成后，把听感和评分填入 `生成复盘`；音频或 MIDI 可以上传，最后用 `导出素材包` 整理制作资料。
+6. 到 `歌词草稿` 阶段时，DeepSeek 可用会生成真正的完整歌词；不可用时会标记为本地草稿。
+7. 到 `Suno Prompt 实验室` 后点 `生成可复制到 Suno 的提示词`。系统最多生成三套，默认推荐 `primary`，并直接显示 `Style Prompt`、`Lyrics Prompt` 和复制按钮。
+8. 在 Suno 生成后，把听感和评分填入 `生成复盘`；DeepSeek 可用会判断下一轮优先改哪里。音频或 MIDI 可以上传，最后用 `导出素材包` 整理制作资料。
 
 关键规则：
 

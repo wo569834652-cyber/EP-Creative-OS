@@ -8,6 +8,7 @@ os.environ["DEEPSEEK_CONTEXT_WINDOW"] = "1000000"
 Path("test_ep_creative_os.db").unlink(missing_ok=True)
 
 import io
+import json
 import zipfile
 
 import pytest
@@ -107,7 +108,88 @@ def test_v1_session_creates_pending_artifact(client, access_song):
     assert data["artifacts"]
     assert data["artifacts"][0]["status"] == "pending"
     assert data["stage_recommendation"]["next_stage"] == "hook_lab"
+    assert data["artifacts"][0]["content"]["source"] == "local_fallback"
     client.post(f"/api/artifacts/{data['artifacts'][0]['id']}/discard")
+
+
+def test_ai_lyrics_stage_creates_real_lyrics_artifact(client, access_song, monkeypatch):
+    async def fake_chat(self, messages, temperature=0.7, max_tokens=1200, json_mode=False):
+        return (
+            True,
+            """
+            {
+              "assistant_message": "AI 已根据 Hook 和结构写出完整歌词草稿。",
+              "hook": "别关掉我",
+              "lyrics": "[Verse]\\n雨声把房间调暗\\n我把旧消息读到一半\\n[Chorus]\\n别关掉我\\n别关掉我\\n让我在你心里慢慢亮着",
+              "section_notes": [{"section": "Verse", "purpose": "建立雨夜画面"}],
+              "singability_risks": ["副歌第二句还可以更短"],
+              "revision_targets": ["下一轮压缩主歌长句"],
+              "next_actions": ["保存歌词草稿", "进入 Suno Prompt 实验室"]
+            }
+            """,
+        )
+
+    monkeypatch.setattr("app.services.session_engine.DeepSeekClient.chat", fake_chat)
+    client.put(
+        f"/api/songs/{access_song['id']}",
+        json={
+            **access_song,
+            "current_stage": "lyrics_draft",
+            "locked_hook": "别关掉我",
+            "current_structure_route": "classic_pop",
+            "change_summary": "prepare ai lyrics test",
+        },
+    )
+
+    session = client.post(f"/api/songs/{access_song['id']}/sessions", json={"user_message": "写一版更像雨夜卧室的歌词"})
+    assert session.status_code == 200
+    artifact = session.json()["artifacts"][0]
+    assert artifact["artifact_type"] == "lyrics_draft"
+    assert artifact["content"]["source"] == "ai"
+    assert "别关掉我" in artifact["content"]["lyrics"]
+    assert "Lyrics Prompt" not in artifact["content"]["lyrics"]
+
+    accepted = client.post(f"/api/artifacts/{artifact['id']}/accept")
+    assert accepted.status_code == 200
+    song = client.get(f"/api/songs/{access_song['id']}").json()
+    assert "雨声把房间调暗" in song["lyrics"]
+
+
+def test_ai_lyrics_preserves_locked_hook_with_postprocess(client, access_song, monkeypatch):
+    async def fake_chat(self, messages, temperature=0.7, max_tokens=1200, json_mode=False):
+        return (
+            True,
+            json.dumps(
+                {
+                    "assistant_message": "AI 写出一版歌词，但忘了锁定 Hook。",
+                    "hook": "别的句子",
+                    "lyrics": "[Verse]\n雨停在窗边\n我把没说完的话留给房间\n[Chorus]\n我还在这里\n我还在这里",
+                    "section_notes": [],
+                    "singability_risks": [],
+                    "revision_targets": [],
+                    "next_actions": ["保存歌词草稿"],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    monkeypatch.setattr("app.services.session_engine.DeepSeekClient.chat", fake_chat)
+    current = client.get(f"/api/songs/{access_song['id']}").json()
+    client.put(
+        f"/api/songs/{access_song['id']}",
+        json={
+            **current,
+            "current_stage": "lyrics_draft",
+            "locked_hook": "别关掉我",
+            "current_structure_route": "classic_pop",
+            "change_summary": "prepare locked hook test",
+        },
+    )
+    session = client.post(f"/api/songs/{access_song['id']}/sessions", json={})
+    artifact = session.json()["artifacts"][0]
+    assert "别关掉我\n别关掉我" in artifact["content"]["lyrics"]
+    assert artifact["content"]["postprocess_notes"]
+    client.post(f"/api/artifacts/{artifact['id']}/discard")
 
 
 def test_stage_confirm_blocks_when_artifacts_are_pending(client, access_song):
@@ -189,6 +271,43 @@ def test_generation_review_and_asset_bundle(client, access_song):
     assert "generation_reviews.md" in names
     assert "assets_manifest.json" in names
     assert "notes_for_cubase.txt" in names
+
+
+def test_generation_review_uses_ai_when_available(client, access_song, monkeypatch):
+    async def fake_chat(self, messages, temperature=0.7, max_tokens=1200, json_mode=False):
+        return (
+            True,
+            """
+            {
+              "assistant_message": "AI 判断下一轮先改歌词咬字。",
+              "next_revision_target": "lyrics",
+              "next_revision_advice": "副歌保留 Hook，但把主歌长句拆短，让 Suno 更容易唱清楚。",
+              "keep": ["Hook 情绪", "低密度编曲"],
+              "change": ["主歌长句", "副歌前的铺垫"],
+              "next_actions": ["修改歌词草稿", "重新生成 Lyrics Prompt"]
+            }
+            """,
+        )
+
+    monkeypatch.setattr("app.services.session_engine.DeepSeekClient.chat", fake_chat)
+    review = client.post(
+        f"/api/songs/{access_song['id']}/generation-reviews",
+        json={
+            "take_name": "Suno take ai",
+            "text_feedback": "主歌唱不清，副歌情绪是对的。",
+            "hook_accuracy": 4,
+            "style_accuracy": 4,
+            "section_structure": 3,
+            "diction_singability": 2,
+            "emotional_fit": 4,
+            "production_usability": 3,
+        },
+    )
+    assert review.status_code == 200
+    data = review.json()
+    assert data["content"]["source"] == "ai"
+    assert data["content"]["next_revision_target"] == "lyrics"
+    assert "主歌长句" in data["content"]["next_revision_advice"]
 
 
 def test_chat_without_key_is_friendly(client, access_song):

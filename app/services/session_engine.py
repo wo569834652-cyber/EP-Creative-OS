@@ -1,6 +1,11 @@
+import json
+import re
+
 from sqlalchemy.orm import Session
 
+from app.llm.deepseek_client import DeepSeekClient
 from app.models import CreativeArtifact, CreativeSession, EPState, Song
+from app.prompts.producer_system_prompt import PRODUCER_SYSTEM_PROMPT
 from app.services.hooks import generate_hooks
 from app.services.stages import next_stage
 from app.services.suno_engine import build_suno_prompt_packs
@@ -22,6 +27,297 @@ def _short_hook_seed(song: Song) -> str:
         return "access denied"
     title = (song.title or "别停下").strip()
     return title if len(title) <= 12 else title[:12]
+
+
+def _as_list(value, fallback: list | None = None) -> list:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return fallback or []
+    return [value]
+
+
+def _json_from_model_text(text: str) -> dict | None:
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    raw = fenced.group(1) if fenced else text
+    if "{" in raw and "}" in raw:
+        raw = raw[raw.find("{") : raw.rfind("}") + 1]
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _context_payload(song: Song, ep: EPState, stage: str, user_goal: str, user_message: str) -> dict:
+    return {
+        "stage": stage,
+        "user_goal": user_goal,
+        "user_message": user_message,
+        "ep": {
+            "title": ep.title,
+            "one_liner": ep.one_liner,
+            "core_theme": ep.core_theme,
+            "world_view": ep.world_view,
+            "emotional_keywords": ep.emotional_keywords,
+            "aesthetic_keywords": ep.aesthetic_keywords,
+            "sonic_layers": ep.sonic_layers,
+            "narrative_arc": ep.narrative_arc,
+        },
+        "song": {
+            "title": song.title,
+            "function_in_ep": song.function_in_ep,
+            "concept": song.concept,
+            "emotional_goal": song.emotional_goal,
+            "bpm": song.bpm,
+            "genre_direction": song.genre_direction,
+            "language_plan": song.language_plan,
+            "lyrics": song.lyrics,
+            "locked_hook": song.locked_hook,
+            "current_structure_route": song.current_structure_route,
+            "notes": song.notes,
+        },
+    }
+
+
+def _stage_prompt(stage: str, context: dict) -> str:
+    contracts = {
+        "diagnosis": {
+            "artifact_type": "diagnosis",
+            "required_json": {
+                "assistant_message": "中文，像制作人一样指出这首歌现在最该解决什么",
+                "ep_function": "这首歌在 EP 里的功能",
+                "biggest_problem": "当前最大创作问题",
+                "strongest_material": ["最有用的歌名/画面/短句/声音线索"],
+                "recommended_next_stage": "hook_lab",
+                "risks": ["至少 3 条风险"],
+                "next_actions": ["2-4 个下一步动作"],
+            },
+        },
+        "hook_lab": {
+            "artifact_type": "hook_set",
+            "required_json": {
+                "assistant_message": "中文，说明推荐哪个 Hook 和为什么",
+                "recommended_hook": "最推荐的一句 Hook",
+                "hooks": [
+                    {
+                        "hook_text": "短、可重复、可唱",
+                        "why_it_works": "为什么成立",
+                        "rhythm_notes": "节奏/落拍/重复方式",
+                        "suno_risk": "给 Suno 的风险",
+                        "score": 1,
+                    }
+                ],
+                "next_actions": ["2-4 个下一步动作"],
+            },
+        },
+        "structure_lab": {
+            "artifact_type": "structure_route",
+            "required_json": {
+                "assistant_message": "中文，推荐稳定路线，也保留创新选择",
+                "recommended_route": "classic_pop 或自定义 snake_case",
+                "routes": [
+                    {
+                        "route": "snake_case",
+                        "label": "中文路线名",
+                        "why": "为什么适合这首歌",
+                        "section_map": [{"section": "段落名", "function": "这一段承担什么"}],
+                        "hook_placement": ["Hook 出现位置"],
+                        "stability": 1,
+                        "innovation": 1,
+                        "suno_risks": ["风险"],
+                        "how_to_feed_suno": "如何写进 Suno Lyrics Prompt",
+                    }
+                ],
+                "next_actions": ["2-4 个下一步动作"],
+            },
+        },
+        "lyrics_draft": {
+            "artifact_type": "lyrics_draft",
+            "required_json": {
+                "assistant_message": "中文，说明歌词草稿策略",
+                "hook": "使用的 Hook",
+                "lyrics": "完整歌词草稿。必须是真歌词，不是写给 Suno 的说明。保留段落标签。",
+                "section_notes": [{"section": "段落名", "purpose": "功能"}],
+                "singability_risks": ["可唱性风险"],
+                "revision_targets": ["下一轮最该改哪里"],
+                "next_actions": ["2-4 个下一步动作"],
+            },
+        },
+        "generation_review": {
+            "artifact_type": "generation_review",
+            "required_json": {
+                "assistant_message": "中文，根据用户反馈判断下一轮优先改哪里",
+                "next_revision_target": "hook/style/lyrics/structure/production 之一",
+                "next_revision_advice": "具体修改建议",
+                "keep": ["应该保留什么"],
+                "change": ["应该修改什么"],
+                "next_actions": ["2-4 个下一步动作"],
+            },
+        },
+    }
+    contract = contracts[stage]
+    return (
+        f"{PRODUCER_SYSTEM_PROMPT}\n\n"
+        "你正在 EP Creative OS 的主流程中工作。请真正承担制作人/词作者/结构顾问职责，不要只给模板。\n"
+        "只返回一个 JSON 对象，不要 Markdown，不要解释 JSON 以外的文字。\n"
+        "所有用户可见内容用中文；后端枚举值可用英文 snake_case。\n"
+        "歌词阶段必须输出完整歌词草稿，不要输出 Lyrics Prompt 或写作说明。\n"
+        "如果 song.locked_hook 非空，歌词必须原样包含这个 locked_hook，优先放在 Chorus 开头并重复。\n"
+        "Suno 风险可以提，但不要把 Style Prompt 的语言标签写成 Mandarin/Chinese/普通话/中文。\n\n"
+        f"当前阶段契约：{json.dumps(contract, ensure_ascii=False)}\n\n"
+        f"项目上下文：{json.dumps(context, ensure_ascii=False)}"
+    )
+
+
+async def _try_ai_stage(
+    song: Song,
+    ep: EPState,
+    stage: str,
+    user_goal: str,
+    user_message: str,
+) -> tuple[str, list[dict], list[str]] | None:
+    if stage not in {"diagnosis", "hook_lab", "structure_lab", "lyrics_draft", "generation_review"}:
+        return None
+
+    context = _context_payload(song, ep, stage, user_goal, user_message)
+    ok, text = await DeepSeekClient().chat(
+        [
+            {"role": "system", "content": PRODUCER_SYSTEM_PROMPT},
+            {"role": "user", "content": _stage_prompt(stage, context)},
+        ],
+        temperature=0.85 if stage in {"hook_lab", "lyrics_draft"} else 0.55,
+        max_tokens=12000 if stage == "lyrics_draft" else 8000 if stage == "structure_lab" else 5000,
+        json_mode=True,
+    )
+    if not ok:
+        return None
+    data = _json_from_model_text(text)
+    if not data:
+        return None
+
+    source = {"source": "ai", "model": "deepseek", "fallback": False}
+    assistant_message = data.get("assistant_message") or "AI 已生成本阶段创作建议。"
+    next_actions = _as_list(data.get("next_actions"), ["保存本阶段产物", "进入下一阶段"])
+
+    if stage == "diagnosis":
+        content = {
+            "ep_function": data.get("ep_function") or song.function_in_ep,
+            "biggest_problem": data.get("biggest_problem") or "",
+            "strongest_material": _as_list(data.get("strongest_material")),
+            "recommended_next_stage": data.get("recommended_next_stage") or "hook_lab",
+            "risks": _as_list(data.get("risks")),
+            **source,
+        }
+        artifacts = [
+            {
+                "artifact_type": "diagnosis",
+                "title": f"{song.title} / AI 歌曲诊断",
+                "summary": content["biggest_problem"] or "AI 诊断当前创作方向。",
+                "content": content,
+                "is_recommended": True,
+            }
+        ]
+        return assistant_message, artifacts, next_actions
+
+    if stage == "hook_lab":
+        hooks = _as_list(data.get("hooks"))
+        normalized_hooks = []
+        for index, hook in enumerate(hooks[:5]):
+            if not isinstance(hook, dict):
+                continue
+            normalized_hooks.append(
+                {
+                    "hook_text": str(hook.get("hook_text") or "").strip(),
+                    "why_it_works": hook.get("why_it_works") or "",
+                    "rhythm_notes": hook.get("rhythm_notes") or "",
+                    "suno_risk": hook.get("suno_risk") or "",
+                    "score": int(hook.get("score") or max(60, 90 - index * 5)),
+                }
+            )
+        recommended = data.get("recommended_hook") or (normalized_hooks[0]["hook_text"] if normalized_hooks else _short_hook_seed(song))
+        content = {"hooks": normalized_hooks, "recommended_hook": recommended, **source}
+        artifacts = [
+            {
+                "artifact_type": "hook_set",
+                "title": f"{song.title} / AI Hook 候选组",
+                "summary": f"AI 推荐 Hook：{recommended}",
+                "content": content,
+                "is_recommended": True,
+            }
+        ]
+        return assistant_message, artifacts, next_actions
+
+    if stage == "structure_lab":
+        content = {
+            "recommended_route": data.get("recommended_route") or "classic_pop",
+            "routes": _as_list(data.get("routes")),
+            **source,
+        }
+        artifacts = [
+            {
+                "artifact_type": "structure_route",
+                "title": f"{song.title} / AI 结构路线",
+                "summary": f"AI 推荐结构：{content['recommended_route']}",
+                "content": content,
+                "is_recommended": True,
+            }
+        ]
+        return assistant_message, artifacts, next_actions
+
+    if stage == "lyrics_draft":
+        lyrics = str(data.get("lyrics") or "").strip()
+        if len(lyrics) < 40:
+            return None
+        hook = song.locked_hook or data.get("hook") or _short_hook_seed(song)
+        postprocess_notes = []
+        if song.locked_hook and song.locked_hook not in lyrics:
+            if "[Chorus]" in lyrics:
+                lyrics = lyrics.replace("[Chorus]", f"[Chorus]\n{song.locked_hook}\n{song.locked_hook}", 1)
+            else:
+                lyrics = f"{lyrics}\n\n[Chorus]\n{song.locked_hook}\n{song.locked_hook}"
+            postprocess_notes.append("AI 未原样保留锁定 Hook，系统已把锁定 Hook 插入副歌开头。")
+        content = {
+            "lyrics": lyrics,
+            "hook": hook,
+            "section_notes": _as_list(data.get("section_notes")),
+            "singability_risks": _as_list(data.get("singability_risks")),
+            "revision_targets": _as_list(data.get("revision_targets")),
+            "postprocess_notes": postprocess_notes,
+            **source,
+        }
+        artifacts = [
+            {
+                "artifact_type": "lyrics_draft",
+                "title": f"{song.title} / AI 歌词草稿",
+                "summary": f"AI 基于 Hook「{hook}」生成完整歌词草稿。",
+                "content": content,
+                "is_recommended": True,
+            }
+        ]
+        return assistant_message, artifacts, next_actions
+
+    if stage == "generation_review":
+        content = {
+            "text_feedback": user_message,
+            "next_revision_target": data.get("next_revision_target") or "lyrics",
+            "next_revision_advice": data.get("next_revision_advice") or "",
+            "keep": _as_list(data.get("keep")),
+            "change": _as_list(data.get("change")),
+            **source,
+        }
+        artifacts = [
+            {
+                "artifact_type": "generation_review",
+                "title": f"{song.title} / AI 生成复盘",
+                "summary": content["next_revision_advice"] or "AI 复盘下一轮修改方向。",
+                "content": content,
+                "is_recommended": True,
+            }
+        ]
+        return assistant_message, artifacts, next_actions
+
+    return None
 
 
 def _diagnosis(song: Song, ep: EPState) -> tuple[str, list[dict], list[str]]:
@@ -319,7 +615,50 @@ def build_stage_output(song: Song, ep: EPState, stage: str) -> tuple[str, list[d
     )
 
 
-def create_session_with_artifacts(
+def _mark_fallback(artifact_payloads: list[dict]) -> None:
+    for payload in artifact_payloads:
+        payload.setdefault("content", {})
+        payload["content"].setdefault("source", "local_fallback")
+        payload["content"].setdefault("fallback", True)
+
+
+async def build_stage_output_with_ai(
+    song: Song,
+    ep: EPState,
+    stage: str,
+    user_goal: str,
+    user_message: str,
+) -> tuple[str, list[dict], list[str]]:
+    ai_output = await _try_ai_stage(song, ep, stage, user_goal, user_message)
+    if ai_output:
+        return ai_output
+
+    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage)
+    _mark_fallback(artifact_payloads)
+    if stage in {"diagnosis", "hook_lab", "structure_lab", "lyrics_draft", "generation_review"}:
+        message = f"AI 本阶段生成不可用，已临时使用本地规则草稿。\n\n{message}"
+    return message, artifact_payloads, next_actions
+
+
+async def build_generation_review_with_ai(
+    song: Song,
+    ep: EPState,
+    feedback_context: dict,
+) -> dict | None:
+    result = await _try_ai_stage(
+        song,
+        ep,
+        "generation_review",
+        "根据 Suno 生成结果决定下一轮修改优先级",
+        json.dumps(feedback_context, ensure_ascii=False),
+    )
+    if not result:
+        return None
+    _, artifact_payloads, _ = result
+    return artifact_payloads[0] if artifact_payloads else None
+
+
+async def create_session_with_artifacts(
     db: Session,
     song: Song,
     ep: EPState,
@@ -329,7 +668,7 @@ def create_session_with_artifacts(
     user_goal: str,
     user_message: str,
 ) -> CreativeSession:
-    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage)
+    message, artifact_payloads, next_actions = await build_stage_output_with_ai(song, ep, stage, user_goal, user_message)
     session = CreativeSession(
         song_id=song.id,
         stage=stage,

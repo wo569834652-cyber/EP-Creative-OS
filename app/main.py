@@ -39,7 +39,7 @@ from app.services.assets import create_asset_bundle, store_upload
 from app.services.cubase_export import create_cubase_pack
 from app.services.hooks import generate_hooks
 from app.services.importer import import_suno_file
-from app.services.session_engine import create_session_with_artifacts
+from app.services.session_engine import build_generation_review_with_ai, create_session_with_artifacts
 from app.services.stages import STAGE_LABELS, next_stage, stage_metadata
 from app.services.suno import generate_suno_prompt
 from app.services.suno_engine import build_suno_prompt_packs
@@ -177,11 +177,11 @@ def delete_song(song_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/songs/{song_id}/sessions", response_model=SessionRead)
-def create_session(song_id: int, payload: SessionCreate, db: Session = Depends(get_db)) -> CreativeSession:
+async def create_session(song_id: int, payload: SessionCreate, db: Session = Depends(get_db)) -> CreativeSession:
     song = get_song_or_404(db, song_id)
     ep = get_ep_or_404(db, song.ep_id)
     stage = payload.stage or song.current_stage
-    session = create_session_with_artifacts(
+    session = await create_session_with_artifacts(
         db,
         song,
         ep,
@@ -318,8 +318,9 @@ def create_suno_prompt_packs(song_id: int, db: Session = Depends(get_db)) -> Sun
 
 
 @app.post("/api/songs/{song_id}/generation-reviews", response_model=CreativeArtifactRead)
-def create_generation_review(song_id: int, payload: GenerationReviewCreate, db: Session = Depends(get_db)) -> CreativeArtifact:
+async def create_generation_review(song_id: int, payload: GenerationReviewCreate, db: Session = Depends(get_db)) -> CreativeArtifact:
     song = get_song_or_404(db, song_id)
+    ep = get_ep_or_404(db, song.ep_id)
     scores = {
         "hook_accuracy": payload.hook_accuracy,
         "style_accuracy": payload.style_accuracy,
@@ -328,6 +329,37 @@ def create_generation_review(song_id: int, payload: GenerationReviewCreate, db: 
         "emotional_fit": payload.emotional_fit,
         "production_usability": payload.production_usability,
     }
+    feedback_context = {
+        "take_name": payload.take_name,
+        "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+        "text_feedback": payload.text_feedback,
+        "scores": scores,
+    }
+    ai_payload = await build_generation_review_with_ai(song, ep, feedback_context)
+    if ai_payload:
+        content = {
+            **ai_payload["content"],
+            "take_name": payload.take_name,
+            "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+            "text_feedback": payload.text_feedback,
+            "scores": scores,
+        }
+        artifact = CreativeArtifact(
+            song_id=song.id,
+            artifact_type="generation_review",
+            title=f"{song.title} / AI 生成复盘 / {payload.take_name}",
+            summary=ai_payload["summary"],
+            content=content,
+            status="accepted",
+            is_recommended=True,
+        )
+        db.add(artifact)
+        db.flush()
+        create_version(db, song, "generation_review", f"AI 记录生成复盘：{payload.take_name}", artifact_ids=[artifact.id])
+        db.commit()
+        db.refresh(artifact)
+        return artifact
+
     lowest = min(scores, key=scores.get)
     revision_map = {
         "hook_accuracy": "优先缩短 Hook，并在 Lyrics Prompt 中重复标注副歌第一句。",
@@ -344,6 +376,8 @@ def create_generation_review(song_id: int, payload: GenerationReviewCreate, db: 
         "scores": scores,
         "next_revision_target": lowest,
         "next_revision_advice": revision_map[lowest],
+        "source": "local_fallback",
+        "fallback": True,
     }
     artifact = CreativeArtifact(
         song_id=song.id,

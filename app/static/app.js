@@ -269,8 +269,12 @@ function artifactCard(artifact, pending = false) {
   card.className = `artifact-card ${artifact.status === "pending" ? "pending" : ""} ${artifact.locked ? "locked" : ""}`;
   const label = artifactLabels[artifact.artifact_type] || artifact.artifact_type;
   const actionHint = artifactActionHint(artifact);
+  const sourceText = artifact.content?.source === "ai" ? "AI 生成" : artifact.content?.fallback ? "本地草稿" : "";
   card.innerHTML = `
-    <div class="artifact-meta"><span>${label}</span><span>${artifact.locked ? "已锁定" : artifact.status === "accepted" ? "已接受" : artifact.status === "discarded" ? "已丢弃" : "待确认"}</span></div>
+    <div class="artifact-meta">
+      <span>${label}${sourceText ? ` · ${sourceText}` : ""}</span>
+      <span>${artifact.locked ? "已锁定" : artifact.status === "accepted" ? "已接受" : artifact.status === "discarded" ? "已丢弃" : "待确认"}</span>
+    </div>
     <p class="artifact-title">${artifact.title}</p>
     <p class="artifact-summary">${artifact.summary || ""}</p>
     <p class="artifact-impact">${actionHint}</p>
@@ -293,6 +297,12 @@ function artifactCard(artifact, pending = false) {
     if (preview) preview.remove();
     const view = promptPackView(artifact);
     if (view) card.append(view);
+  } else if (artifact.artifact_type === "lyrics_draft" && artifact.content?.lyrics) {
+    const preview = card.querySelector(".artifact-preview");
+    if (preview) {
+      preview.textContent = artifact.content.lyrics;
+      preview.classList.add("lyrics-preview");
+    }
   }
   return card;
 }
