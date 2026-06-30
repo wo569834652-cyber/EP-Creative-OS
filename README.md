@@ -35,7 +35,20 @@ If DeepSeek is unavailable or returns invalid structured output, the app falls b
 
 `Suno Prompt 实验室` remains rule-led for quality control: it uses the accepted Hook, structure route, and accepted lyrics to build copyable `Style Prompt` and `Lyrics Prompt` packs. The `Lyrics Prompt` includes the accepted song lyrics when available.
 
+## Recommended Local Use
+
+On Windows, you do not need to type terminal commands for normal use:
+
+1. Double-click `打开 EP Creative OS.bat`.
+2. Wait for the browser to open `http://127.0.0.1:8000`.
+3. Use the app normally.
+4. Close it from the top-right `关闭服务` button in the webpage, or double-click `关闭 EP Creative OS.bat`.
+
+The first launch creates `.venv` and installs `requirements.txt`, so it may take longer. Later launches should be much faster.
+
 ## Run Locally
+
+Manual development mode:
 
 ```bash
 python -m venv .venv

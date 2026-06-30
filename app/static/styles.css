@@ -356,6 +356,12 @@ textarea.tall {
   color: #fff;
 }
 
+.danger-button {
+  color: #8b243e;
+  border-color: #d9b8c1;
+  background: #fff7f8;
+}
+
 .ghost-button,
 .mini-button,
 .file-button {

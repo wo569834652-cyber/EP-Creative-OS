@@ -757,6 +757,20 @@ async function exportBundle() {
   }
 }
 
+async function shutdownService() {
+  const confirmed = window.confirm("要关闭 EP Creative OS 本地服务吗？关闭后刷新页面会打不开，需要重新双击启动文件。");
+  if (!confirmed) return;
+  const buttonEl = $("shutdown-service");
+  buttonEl.disabled = true;
+  buttonEl.textContent = "正在关闭...";
+  $("assistant-message").textContent = "本地服务正在关闭。几秒后你可以直接关闭这个浏览器标签页；下次使用请双击“打开 EP Creative OS.bat”。";
+  try {
+    await fetch("/api/system/shutdown", { method: "POST" });
+  } catch (_) {
+    // The request may be interrupted because the server is shutting down.
+  }
+}
+
 async function saveSong() {
   if (!currentSong) return;
   currentSong = await api(`/api/songs/${currentSong.id}`, {
@@ -794,6 +808,7 @@ $("make-suno").onclick = () => makeSuno().catch((err) => toast(err.message));
 $("save-review").onclick = () => saveReview().catch((err) => toast(err.message));
 $("asset-file").onchange = () => uploadAsset().catch((err) => toast(err.message));
 $("export-bundle").onclick = () => exportBundle().catch((err) => toast(err.message));
+$("shutdown-service").onclick = () => shutdownService().catch((err) => toast(err.message));
 $("refresh-board").onclick = () => refreshBoard().catch((err) => toast(err.message));
 $("open-archive").onclick = () => {
   $("archive-drawer").classList.add("open");

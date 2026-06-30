@@ -1,6 +1,8 @@
+import os
+import threading
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -99,6 +101,19 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok", "version": "1.0.0"}
+
+
+@app.post("/api/system/shutdown")
+def shutdown(request: Request) -> dict:
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(status_code=403, detail="只允许从本机关闭服务。")
+
+    def stop_process() -> None:
+        os._exit(0)
+
+    threading.Timer(0.4, stop_process).start()
+    return {"status": "shutting_down"}
 
 
 @app.get("/api/stages", response_model=list[StageInfo])
