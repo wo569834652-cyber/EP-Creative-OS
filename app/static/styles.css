@@ -484,6 +484,24 @@ textarea.tall {
   line-height: 1.65;
 }
 
+.quality-badge {
+  padding: 7px 8px;
+  margin: 7px 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quality-badge.pass {
+  color: #0e5d4f;
+  background: #e4f3ee;
+}
+
+.quality-badge.warn {
+  color: #8b243e;
+  background: #fff1f3;
+}
+
 .prompt-pack-list {
   display: grid;
   gap: 12px;
@@ -601,6 +619,26 @@ textarea.tall {
 .board-card {
   padding: 13px;
   margin-bottom: 12px;
+}
+
+.version-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.version-snapshot {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #191c20;
+  color: #f5f1e8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 .current-line {

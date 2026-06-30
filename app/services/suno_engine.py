@@ -23,6 +23,56 @@ def _base_hook(song: Song) -> str:
     return "别停下"
 
 
+def _compact(value: str | None, fallback: str, limit: int = 120) -> str:
+    text = " ".join((value or "").split())
+    if not text:
+        return fallback
+    return text[:limit]
+
+
+def _sonic_identity(song: Song, variant: str) -> str:
+    concept = _compact(song.concept, song.title or "unfinished memory")
+    function = _compact(song.function_in_ep, "a transitional EP track")
+    emotion = _compact(song.emotional_goal, "restrained, unresolved, intimate")
+    if variant == "experimental":
+        return (
+            f"sonic identity: translate `{concept}` into a colder repeated motif; EP function: {function}; "
+            f"emotional target: {emotion}; use small system-like details as rhythm, not as spoken exposition"
+        )
+    if variant == "alternate":
+        return (
+            f"sonic identity: keep `{concept}` personal and close, but make the hook easier to remember; "
+            f"EP function: {function}; emotional target: {emotion}; avoid decorative drama"
+        )
+    return (
+        f"sonic identity: make `{concept}` feel like a usable song scene, not a summary; "
+        f"EP function: {function}; emotional target: {emotion}; keep the production intimate and executable"
+    )
+
+
+def _arrangement_motion(route_label: str, variant: str) -> str:
+    if route_label == "loop_mantra" or variant == "experimental":
+        return "arrangement movement: loop-based intro, one motif mutates every 8 bars, no traditional big lift, final hook becomes thinner not bigger"
+    if route_label == "classic_pop":
+        return "arrangement movement: verse stays narrow, pre-chorus removes low end, chorus adds one doubled vocal and one higher pad, bridge strips drums"
+    if route_label == "contrast_turn":
+        return "arrangement movement: cold open exposes the hook, verse drops density, chorus pivots into a tighter pulse, bridge changes texture only once"
+    return "arrangement movement: start with a small denial motif, verse adds room tone, pre-chorus tightens pulse, chorus repeats hook without a stadium lift"
+
+
+def _style_specificity_score(style_prompt: str, song: Song) -> int:
+    score = 40
+    required_terms = ["sonic identity", "arrangement movement", "groove/drums", "bass", "vocal direction", "mix/space", "forbidden terms"]
+    score += sum(7 for term in required_terms if term in style_prompt)
+    if song.title and song.title in style_prompt:
+        score += 6
+    if song.concept and _compact(song.concept, "", 24)[:4] in style_prompt:
+        score += 8
+    if song.function_in_ep and _compact(song.function_in_ep, "", 24)[:4] in style_prompt:
+        score += 5
+    return max(0, min(100, score))
+
+
 def _quality_checks(style_prompt: str, lyrics_prompt: str, hook: str) -> list[dict]:
     checks = [
         ("Style Prompt 不含语言标签", not any(term in style_prompt for term in FORBIDDEN_STYLE_TERMS)),
@@ -30,6 +80,9 @@ def _quality_checks(style_prompt: str, lyrics_prompt: str, hook: str) -> list[di
         ("包含 groove/drums", "groove" in style_prompt and "drums" in style_prompt),
         ("包含 bass", "bass" in style_prompt),
         ("包含 vocal direction", "vocal direction" in style_prompt),
+        ("包含 sonic identity", "sonic identity" in style_prompt),
+        ("包含 arrangement movement", "arrangement movement" in style_prompt),
+        ("包含 mix/space", "mix/space" in style_prompt),
         ("Lyrics Prompt 包含 Hook", hook in lyrics_prompt),
         ("包含 negative terms", "negative" in style_prompt.lower() or "forbidden" in style_prompt.lower()),
         ("包含修正策略", "Revision target" in lyrics_prompt),
@@ -43,14 +96,17 @@ def _pack(song: Song, variant: str, recommended: bool, route: str, mood_shift: s
     hook = _base_hook(song)
     route_label = route or song.current_structure_route or "error_system"
     style_prompt = (
-        f"Primary genre: {primary}; secondary genre: {secondary}; BPM: {bpm}; "
+        f"Track title: {song.title or 'untitled'}; primary genre: {primary}; secondary genre: {secondary}; BPM: {bpm}; "
+        f"{_sonic_identity(song, variant)}; "
         "groove/drums: restrained mid-tempo pulse, dry kick, soft snare, sparse glitch ticks, no big drop; "
-        "bass: warm sub bass repeating a simple two-note pressure pattern; "
-        "harmony/instrument palette: muted electric piano, narrow synth pad, low system hum, small alert-like motifs; "
-        "vocal direction: close intimate lead, controlled breath, doubled hook only on the second repeat; "
+        "bass: warm sub bass with a simple pressure pattern that answers the hook, not a busy riff; "
+        "harmony/instrument palette: muted electric piano, narrow synth pad, low system hum, one small motif tied to the song scene; "
+        "vocal direction: close intimate lead, controlled breath, slightly tired consonants, doubled hook only on the second repeat; "
+        f"{_arrangement_motion(route_label, variant)}; "
         f"mood: {song.emotional_goal or 'cold, stuck, intimate, unresolved'} {mood_shift}; "
-        "production constraints: leave negative space around the hook, keep sections readable; "
-        "forbidden terms: no language labels, no cinematic trailer, no EDM drop, no rock anthem, no spoken essay."
+        "mix/space: dry lead vocal, small room, low-volume background artifacts, leave silence before the first hook repeat; "
+        "production constraints: sections must stay readable, chorus must not turn into a spoken essay; "
+        "forbidden terms: no language labels, no cinematic trailer, no EDM drop, no rock anthem, no motivational anthem."
     )
 
     if route_label == "error_system":
@@ -116,6 +172,7 @@ def _pack(song: Song, variant: str, recommended: bool, route: str, mood_shift: s
         "revision_strategy": "Hook 不清楚就改 Lyrics Prompt；风格偏离就改 Style Prompt；段落混乱就减少标签和缩短副歌。",
         "suno_risks": ["副歌句子过长会变成朗读", "Style Prompt 写语言标签会污染风格", "抽象概念堆叠会削弱可唱性"],
         "quality_checks": _quality_checks(style_prompt, lyrics_prompt, hook),
+        "style_specificity_score": _style_specificity_score(style_prompt, song),
     }
 
 

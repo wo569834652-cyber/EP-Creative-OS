@@ -105,6 +105,19 @@ def create_version_from_artifact(db: Session, artifact: CreativeArtifact) -> Son
     )
 
 
+def restore_song_from_version(db: Session, song: Song, version: SongVersion) -> SongVersion:
+    snapshot = version.content_snapshot or {}
+    for field in VERSION_FIELDS:
+        if field in snapshot:
+            setattr(song, field, snapshot[field])
+    return create_version(
+        db,
+        song,
+        "restore",
+        f"回溯到 v{version.version_number}: {version.summary or version.change_summary or version.change_type}",
+    )
+
+
 def snapshot_diff(from_version: SongVersion, to_version: SongVersion) -> str:
     left = json.dumps(from_version.content_snapshot, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
     right = json.dumps(to_version.content_snapshot, ensure_ascii=False, indent=2, sort_keys=True).splitlines()

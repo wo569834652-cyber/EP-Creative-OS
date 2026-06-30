@@ -49,6 +49,118 @@ def _json_from_model_text(text: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+GENERIC_LYRIC_PHRASES = [
+    "世界太吵",
+    "落在心上",
+    "星辰大海",
+    "眼泪的重量",
+    "黑夜尽头",
+    "拥抱孤单",
+    "时间会回答",
+    "人海",
+    "命运",
+    "永远",
+]
+
+
+def _meaningful_fragments(*values: str | None) -> list[str]:
+    fragments: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        cleaned = re.sub(r"[\s,，。.!！?？、/\\|:：;；()\[\]{}<>《》\"'“”‘’]+", " ", value)
+        for part in cleaned.split():
+            part = part.strip()
+            if len(part) >= 2 and part not in fragments:
+                fragments.append(part)
+    return fragments[:12]
+
+
+def _score_lyrics_quality(song: Song, lyrics: str, model_data: dict | None = None) -> dict:
+    score = 100
+    issues: list[str] = []
+    strengths: list[str] = []
+    section_count = len(re.findall(r"^\[[^\]]+\]", lyrics, flags=re.MULTILINE))
+
+    if len(lyrics.strip()) < 180:
+        score -= 22
+        issues.append("歌词长度偏短，还不像一版完整可测试的歌。")
+    if section_count < 4:
+        score -= 15
+        issues.append("段落标签不足，Suno 很可能读不清主歌/副歌/桥段。")
+    else:
+        strengths.append("段落结构可被 Suno 识别。")
+
+    hook = (song.locked_hook or str((model_data or {}).get("hook") or "")).strip()
+    if hook:
+        hook_count = lyrics.count(hook)
+        if hook_count == 0:
+            score -= 30
+            issues.append("没有原样保留已锁定 Hook。")
+        elif hook_count == 1:
+            score -= 8
+            issues.append("Hook 只出现一次，记忆点可能不够。")
+        else:
+            strengths.append("Hook 有重复，适合作为副歌锚点。")
+
+    generic_hits = [phrase for phrase in GENERIC_LYRIC_PHRASES if phrase in lyrics]
+    if generic_hits:
+        score -= min(20, len(generic_hits) * 5)
+        issues.append(f"出现泛化套话：{'、'.join(generic_hits[:4])}。")
+
+    fragments = _meaningful_fragments(song.title, song.concept, song.function_in_ep, song.emotional_goal)
+    matched = [fragment for fragment in fragments if fragment in lyrics]
+    if fragments and not matched:
+        score -= 18
+        issues.append("没有把歌名/概念/EP 功能里的具体材料写进歌词。")
+    elif matched:
+        strengths.append(f"已吸收核心材料：{'、'.join(matched[:3])}。")
+
+    chorus_blocks = re.findall(r"\[Chorus[^\]]*\](.*?)(?=\n\[[^\]]+\]|\Z)", lyrics, flags=re.DOTALL | re.IGNORECASE)
+    if chorus_blocks:
+        longest_chorus = max(len(block.strip()) for block in chorus_blocks)
+        if longest_chorus > 220:
+            score -= 10
+            issues.append("副歌段落偏长，可能被唱成说明文字。")
+    else:
+        score -= 12
+        issues.append("没有明确 Chorus，Hook 落点不够清楚。")
+
+    if re.search(r"Lyrics Prompt|Style Prompt|写作说明|创作策略", lyrics, flags=re.IGNORECASE):
+        score -= 25
+        issues.append("歌词里混入了 Prompt 或说明文字。")
+
+    model_score = (model_data or {}).get("quality_score")
+    if isinstance(model_score, int | float):
+        score = round((score * 0.75) + (max(0, min(100, int(model_score))) * 0.25))
+
+    score = max(0, min(100, int(score)))
+    if score >= 76:
+        band = "pass"
+    elif score >= 62:
+        band = "needs_review"
+    else:
+        band = "retry_or_rewrite"
+    return {
+        "quality_score": score,
+        "quality_band": band,
+        "quality_passed": score >= 70,
+        "quality_issues": issues,
+        "quality_strengths": strengths,
+    }
+
+
+def _lyrics_retry_prompt(context: dict, lyrics: str, quality: dict) -> str:
+    return (
+        f"{_stage_prompt('lyrics_draft', context)}\n\n"
+        "上一版歌词没有达到 V1 可测试标准，请只返回同一 JSON contract 的重写结果。\n"
+        f"上一版质量评分：{quality['quality_score']}/100\n"
+        f"必须修复的问题：{json.dumps(quality['quality_issues'], ensure_ascii=False)}\n"
+        "重写要求：保留 locked_hook 原文；减少套话；增加具体画面；副歌短且可重复；不要输出说明文字。\n\n"
+        f"上一版歌词：\n{lyrics}"
+    )
+
+
 def _context_payload(song: Song, ep: EPState, stage: str, user_goal: str, user_message: str) -> dict:
     return {
         "stage": stage,
@@ -157,6 +269,17 @@ def _stage_prompt(stage: str, context: dict) -> str:
         },
     }
     contract = contracts[stage]
+    lyrics_quality_rules = ""
+    if stage == "lyrics_draft":
+        lyrics_quality_rules = (
+            "\n歌词草稿质量标准：\n"
+            "- 先像词作者一样写完整可唱歌词，不要写 Lyrics Prompt、创作说明或散文大纲。\n"
+            "- 必须吸收 song.title、song.concept、song.function_in_ep、song.emotional_goal 里的具体材料；不要只写通用情绪。\n"
+            "- 副歌优先短句、重复、可记忆；如果 song.locked_hook 非空，必须原样出现至少两次。\n"
+            "- 主歌给具体画面和动作，桥段只给一个新角度，不要解释整首歌的设定。\n"
+            "- 避免套话：世界太吵、落在心上、星辰大海、眼泪的重量、黑夜尽头、时间会回答、人海、命运、永远，除非用户材料本来就包含。\n"
+            "- JSON 里必须给 quality_score(1-100)、quality_notes、revision_targets；低于 75 代表你自己也认为还不能直接测试。\n"
+        )
     return (
         f"{PRODUCER_SYSTEM_PROMPT}\n\n"
         "你正在 EP Creative OS 的主流程中工作。请真正承担制作人/词作者/结构顾问职责，不要只给模板。\n"
@@ -164,7 +287,8 @@ def _stage_prompt(stage: str, context: dict) -> str:
         "所有用户可见内容用中文；后端枚举值可用英文 snake_case。\n"
         "歌词阶段必须输出完整歌词草稿，不要输出 Lyrics Prompt 或写作说明。\n"
         "如果 song.locked_hook 非空，歌词必须原样包含这个 locked_hook，优先放在 Chorus 开头并重复。\n"
-        "Suno 风险可以提，但不要把 Style Prompt 的语言标签写成 Mandarin/Chinese/普通话/中文。\n\n"
+        "Suno 风险可以提，但不要把 Style Prompt 的语言标签写成 Mandarin/Chinese/普通话/中文。\n"
+        f"{lyrics_quality_rules}\n"
         f"当前阶段契约：{json.dumps(contract, ensure_ascii=False)}\n\n"
         f"项目上下文：{json.dumps(context, ensure_ascii=False)}"
     )
@@ -181,7 +305,8 @@ async def _try_ai_stage(
         return None
 
     context = _context_payload(song, ep, stage, user_goal, user_message)
-    ok, text = await DeepSeekClient().chat(
+    client = DeepSeekClient()
+    ok, text = await client.chat(
         [
             {"role": "system", "content": PRODUCER_SYSTEM_PROMPT},
             {"role": "user", "content": _stage_prompt(stage, context)},
@@ -267,8 +392,6 @@ async def _try_ai_stage(
 
     if stage == "lyrics_draft":
         lyrics = str(data.get("lyrics") or "").strip()
-        if len(lyrics) < 40:
-            return None
         hook = song.locked_hook or data.get("hook") or _short_hook_seed(song)
         postprocess_notes = []
         if song.locked_hook and song.locked_hook not in lyrics:
@@ -277,6 +400,38 @@ async def _try_ai_stage(
             else:
                 lyrics = f"{lyrics}\n\n[Chorus]\n{song.locked_hook}\n{song.locked_hook}"
             postprocess_notes.append("AI 未原样保留锁定 Hook，系统已把锁定 Hook 插入副歌开头。")
+        quality = _score_lyrics_quality(song, lyrics, data)
+        retry_count = 0
+        if not quality["quality_passed"]:
+            retry_count = 1
+            retry_ok, retry_text = await client.chat(
+                [
+                    {"role": "system", "content": PRODUCER_SYSTEM_PROMPT},
+                    {"role": "user", "content": _lyrics_retry_prompt(context, lyrics, quality)},
+                ],
+                temperature=0.72,
+                max_tokens=12000,
+                json_mode=True,
+            )
+            retry_data = _json_from_model_text(retry_text) if retry_ok else None
+            retry_lyrics = str((retry_data or {}).get("lyrics") or "").strip()
+            if retry_data and len(retry_lyrics) >= 40:
+                retry_notes = []
+                if song.locked_hook and song.locked_hook not in retry_lyrics:
+                    if "[Chorus]" in retry_lyrics:
+                        retry_lyrics = retry_lyrics.replace("[Chorus]", f"[Chorus]\n{song.locked_hook}\n{song.locked_hook}", 1)
+                    else:
+                        retry_lyrics = f"{retry_lyrics}\n\n[Chorus]\n{song.locked_hook}\n{song.locked_hook}"
+                    retry_notes.append("AI 返工稿仍未原样保留锁定 Hook，系统已把锁定 Hook 插入副歌开头。")
+                retry_quality = _score_lyrics_quality(song, retry_lyrics, retry_data)
+                if retry_quality["quality_score"] >= quality["quality_score"]:
+                    data = retry_data
+                    lyrics = retry_lyrics
+                    hook = song.locked_hook or data.get("hook") or hook
+                    postprocess_notes = retry_notes
+                    quality = retry_quality
+        if len(lyrics) < 40:
+            return None
         content = {
             "lyrics": lyrics,
             "hook": hook,
@@ -284,6 +439,13 @@ async def _try_ai_stage(
             "singability_risks": _as_list(data.get("singability_risks")),
             "revision_targets": _as_list(data.get("revision_targets")),
             "postprocess_notes": postprocess_notes,
+            "quality_score": quality["quality_score"],
+            "quality_band": quality["quality_band"],
+            "quality_passed": quality["quality_passed"],
+            "quality_issues": quality["quality_issues"],
+            "quality_strengths": quality["quality_strengths"],
+            "quality_notes": _as_list(data.get("quality_notes")),
+            "ai_retry_count": retry_count,
             **source,
         }
         artifacts = [
@@ -549,7 +711,17 @@ access denied
 让它落在心上"""
         summary = f"围绕「{hook}」展开的可唱草稿。"
         message = "歌词草稿已经先做成稳定可唱版本：主歌放画面，预副歌缩短，副歌只服务 Hook。后续可以在结构实验室切换创新路线。"
-    content = {"lyrics": lyrics, "hook": hook, "notes": "副歌保持短句；复杂概念放在主歌或桥段，避免让 Suno 把 Hook 唱成朗读。"}
+    quality = _score_lyrics_quality(song, lyrics, {"hook": hook})
+    content = {
+        "lyrics": lyrics,
+        "hook": hook,
+        "notes": "副歌保持短句；复杂概念放在主歌或桥段，避免让 Suno 把 Hook 唱成朗读。",
+        "quality_score": quality["quality_score"],
+        "quality_band": quality["quality_band"],
+        "quality_passed": quality["quality_passed"],
+        "quality_issues": quality["quality_issues"],
+        "quality_strengths": quality["quality_strengths"],
+    }
     artifacts = [
         {
             "artifact_type": "lyrics_draft",

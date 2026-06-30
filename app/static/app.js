@@ -104,11 +104,29 @@ function toast(message) {
 
 function shortJson(value) {
   if (!value) return "";
+  if (typeof value.quality_score === "number") {
+    const issues = (value.quality_issues || []).slice(0, 3).join("\n- ");
+    return `质量评分：${value.quality_score}/100\n${issues ? `需要注意：\n- ${issues}` : "暂无明显质量问题。"}\n\n${value.lyrics || JSON.stringify(value, null, 2).slice(0, 500)}`;
+  }
   if (value.recommended_hook) return `推荐 Hook：${value.recommended_hook}`;
   if (value.recommended_route) return `推荐路线：${value.recommended_route}`;
   if (value.recommended_variant) return `推荐方案：${value.recommended_variant}`;
   if (value.next_revision_advice) return value.next_revision_advice;
   return JSON.stringify(value, null, 2).slice(0, 700);
+}
+
+function qualityBadge(content) {
+  if (!content || typeof content.quality_score !== "number") return "";
+  const passed = content.quality_passed;
+  const label = passed ? "可测试" : "需返工";
+  const issues = (content.quality_issues || []).slice(0, 2).join("；");
+  return `<div class="quality-badge ${passed ? "pass" : "warn"}">质量 ${content.quality_score}/100 · ${label}${issues ? ` · ${issues}` : ""}</div>`;
+}
+
+function promptPackQuality(pack) {
+  if (!pack || typeof pack.style_specificity_score !== "number") return "";
+  const failed = (pack.quality_checks || []).filter((item) => !item.passed).map((item) => item.label);
+  return `<p class="${failed.length ? "prompt-source-warn" : "prompt-source-ok"}">Style 具体度 ${pack.style_specificity_score}/100${failed.length ? `，待补：${failed.slice(0, 2).join("、")}` : "，检查通过"}</p>`;
 }
 
 function copyText(text) {
@@ -155,6 +173,7 @@ function promptPackView(artifact) {
           <p class="${pack.lyrics_source === "accepted_song_lyrics" ? "prompt-source-ok" : "prompt-source-warn"}">
             ${pack.lyrics_source === "accepted_song_lyrics" ? "Lyrics Prompt 已包含当前已接受歌词" : "Lyrics Prompt 仍是临时结构模板，请先接受歌词草稿后重新生成"}
           </p>
+          ${promptPackQuality(pack)}
         </div>
         <div class="prompt-pack-actions"></div>
       </div>
@@ -312,6 +331,7 @@ function artifactCard(artifact, pending = false) {
     <p class="artifact-title">${artifact.title}</p>
     <p class="artifact-summary">${artifact.summary || ""}</p>
     <p class="artifact-impact">${actionHint}</p>
+    ${qualityBadge(artifact.content)}
     <div class="artifact-preview">${shortJson(artifact.content)}</div>
   `;
   const actions = document.createElement("div");
@@ -397,9 +417,39 @@ function renderVersions() {
   versions.forEach((version) => {
     const item = document.createElement("div");
     item.className = "version-card";
-    item.innerHTML = `<strong>v${version.version_number}</strong><br><span class="muted">${version.summary || version.change_summary || version.change_type}</span>`;
+    const snapshot = version.content_snapshot || {};
+    item.innerHTML = `
+      <strong>v${version.version_number}</strong><br>
+      <span class="muted">${version.summary || version.change_summary || version.change_type}</span>
+      <div class="version-actions"></div>
+      <pre class="version-snapshot" hidden>${versionSnapshot(version)}</pre>
+    `;
+    const actions = item.querySelector(".version-actions");
+    const snapshotEl = item.querySelector(".version-snapshot");
+    const toggle = button("查看快照", () => {
+      snapshotEl.hidden = !snapshotEl.hidden;
+      toggle.textContent = snapshotEl.hidden ? "查看快照" : "收起快照";
+    });
+    const restore = button("回溯到此版本", () => restoreVersion(version.id));
+    restore.disabled = Boolean(currentSong && snapshot.title === currentSong.title && snapshot.lyrics === currentSong.lyrics && snapshot.current_stage === currentSong.current_stage);
+    actions.append(toggle, restore);
     box.append(item);
   });
+}
+
+function versionSnapshot(version) {
+  const snapshot = version.content_snapshot || {};
+  const picked = {
+    歌名: snapshot.title,
+    阶段: stageLabels[snapshot.current_stage] || snapshot.current_stage,
+    Hook: snapshot.locked_hook || "未锁定",
+    结构路线: snapshot.current_structure_route || "未选择",
+    BPM: snapshot.bpm,
+    风格方向: snapshot.genre_direction || "",
+    歌词预览: snapshot.lyrics ? snapshot.lyrics.slice(0, 360) : "暂无歌词",
+    Style预览: snapshot.style_prompt ? snapshot.style_prompt.slice(0, 260) : "暂无 Style Prompt",
+  };
+  return JSON.stringify(picked, null, 2);
 }
 
 function renderAssets() {
@@ -680,6 +730,24 @@ async function actArtifact(id, action) {
   fillSongHeader();
   await refreshBoard();
   toast("已更新创作产物状态");
+}
+
+async function restoreVersion(versionId) {
+  if (!currentSong) return;
+  const version = versions.find((item) => item.id === versionId);
+  const label = version ? `v${version.version_number}` : "这个版本";
+  const confirmed = window.confirm(`确定把当前歌曲回溯到 ${label} 吗？系统会保留当前记录，并新增一个回溯版本。`);
+  if (!confirmed) return;
+  currentSong = await api(`/api/songs/${currentSong.id}/versions/${versionId}/restore`, {
+    method: "POST",
+    body: "{}",
+  });
+  songs = await api(`/api/songs?ep_id=${currentEpId}`);
+  renderSongs();
+  renderStageProgress();
+  fillSongHeader();
+  await refreshBoard();
+  toast(`已回溯到 ${label}`);
 }
 
 async function saveReview() {

@@ -45,7 +45,14 @@ from app.services.session_engine import build_generation_review_with_ai, create_
 from app.services.stages import STAGE_LABELS, next_stage, stage_metadata
 from app.services.suno import generate_suno_prompt
 from app.services.suno_engine import build_suno_prompt_packs
-from app.services.versioning import create_version, create_version_from_artifact, detect_change_type, snapshot_diff, song_snapshot
+from app.services.versioning import (
+    create_version,
+    create_version_from_artifact,
+    detect_change_type,
+    restore_song_from_version,
+    snapshot_diff,
+    song_snapshot,
+)
 
 
 STAGE_REQUIRED_ARTIFACT = {
@@ -520,6 +527,18 @@ def read_version(song_id: int, version_id: int, db: Session = Depends(get_db)) -
     if not version or version.song_id != song_id:
         raise HTTPException(status_code=404, detail="Version not found")
     return version
+
+
+@app.post("/api/songs/{song_id}/versions/{version_id}/restore", response_model=SongRead)
+def restore_version(song_id: int, version_id: int, db: Session = Depends(get_db)) -> Song:
+    song = get_song_or_404(db, song_id)
+    version = db.get(SongVersion, version_id)
+    if not version or version.song_id != song_id:
+        raise HTTPException(status_code=404, detail="Version not found")
+    restore_song_from_version(db, song, version)
+    db.commit()
+    db.refresh(song)
+    return song
 
 
 @app.get("/api/songs/{song_id}/diff", response_model=DiffResponse)

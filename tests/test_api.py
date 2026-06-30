@@ -192,6 +192,98 @@ def test_ai_lyrics_preserves_locked_hook_with_postprocess(client, access_song, m
     client.post(f"/api/artifacts/{artifact['id']}/discard")
 
 
+def test_ai_lyrics_quality_gate_retries_weak_draft(client, monkeypatch):
+    calls = {"count": 0}
+
+    async def fake_chat(self, messages, temperature=0.7, max_tokens=1200, json_mode=False):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return (
+                True,
+                json.dumps(
+                    {
+                        "assistant_message": "第一版太泛。",
+                        "hook": "别关掉我",
+                        "lyrics": "[Verse]\n世界太吵\n我落在心上\n[Chorus]\n别关掉我",
+                        "quality_score": 35,
+                        "section_notes": [],
+                        "singability_risks": [],
+                        "revision_targets": ["加入具体画面"],
+                        "next_actions": ["重写"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        return (
+            True,
+            json.dumps(
+                {
+                    "assistant_message": "已返工为更具体的歌词。",
+                    "hook": "别关掉我",
+                    "lyrics": (
+                        "[Verse]\n旧对话在床头亮着灰光\n通勤卡还贴着昨晚的体温\n我把钥匙放回外套口袋\n像把一个旧自己重新登录\n\n"
+                        "[Pre-Chorus]\n门外的风不回答\n屏幕只闪一下\n\n"
+                        "[Chorus]\n别关掉我\n别关掉我\n让我在你沉默之前\n再亮一秒\n\n"
+                        "[Bridge]\n如果回忆只是缓存\n我也先不清空它\n\n"
+                        "[Final Chorus]\n别关掉我\n别关掉我\n这次我不解释\n只把灯留小"
+                    ),
+                    "quality_score": 86,
+                    "section_notes": [{"section": "Chorus", "purpose": "短 Hook 重复"}],
+                    "singability_risks": [],
+                    "revision_targets": ["下一轮检查副歌旋律密度"],
+                    "next_actions": ["保存歌词"],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    monkeypatch.setattr("app.services.session_engine.DeepSeekClient.chat", fake_chat)
+    ep = client.post(
+        "/api/eps",
+        json={
+            "title": "QUALITY GATE EP",
+            "one_liner": "测试歌词质检",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    ).json()
+    song = client.post(
+        "/api/songs",
+        json={
+            "ep_id": ep["id"],
+            "title": "别关掉我",
+            "function_in_ep": "旧关系无法访问后的卧室独白",
+            "concept": "旧对话无法重新打开，像登录失败一样卡在卧室灯光里",
+            "emotional_goal": "低电量、克制、仍然舍不得退出",
+            "bpm": 92,
+            "genre_direction": "bedroom pop / lo-fi electronic",
+            "language_plan": "",
+            "lyrics": "",
+            "style_prompt": "",
+            "lyrics_prompt": "",
+            "notes": "",
+            "current_stage": "lyrics_draft",
+            "stage_status": "not_started",
+            "locked_hook": "别关掉我",
+            "current_structure_route": "classic_pop",
+            "current_prompt_pack_id": None,
+        },
+    ).json()
+    session = client.post(f"/api/songs/{song['id']}/sessions", json={"user_message": "写一版不要套话的歌词"})
+    assert session.status_code == 200
+    artifact = session.json()["artifacts"][0]
+    assert calls["count"] == 2
+    assert artifact["content"]["ai_retry_count"] == 1
+    assert artifact["content"]["quality_score"] >= 70
+    assert "旧对话在床头亮着灰光" in artifact["content"]["lyrics"]
+    client.post(f"/api/artifacts/{artifact['id']}/discard")
+
+
 def test_stage_confirm_blocks_when_artifacts_are_pending(client, access_song):
     session = client.post(f"/api/songs/{access_song['id']}/sessions", json={}).json()
     artifact_id = session["artifacts"][0]["id"]
@@ -273,10 +365,74 @@ def test_suno_prompt_packs_are_limited_and_recommended(client, access_song):
     assert sum(1 for pack in data["packs"] if pack["recommended"]) == 1
     style = data["packs"][0]["style_prompt"]
     assert "BPM" in style
+    assert "sonic identity" in style
+    assert "arrangement movement" in style
+    assert data["packs"][0]["style_specificity_score"] >= 70
     assert "Mandarin" not in style
     assert "Chinese" not in style
     assert "普通话" not in style
     assert "中文" not in style
+
+
+def test_restore_version_reverts_song_snapshot_and_creates_new_version(client):
+    ep = client.post(
+        "/api/eps",
+        json={
+            "title": "RESTORE EP",
+            "one_liner": "测试回溯",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    ).json()
+    song = client.post(
+        "/api/songs",
+        json={
+            "ep_id": ep["id"],
+            "title": "RESTORE SONG",
+            "function_in_ep": "初始功能",
+            "concept": "初始概念",
+            "emotional_goal": "",
+            "bpm": 92,
+            "genre_direction": "",
+            "language_plan": "",
+            "lyrics": "old lyric",
+            "style_prompt": "",
+            "lyrics_prompt": "",
+            "notes": "",
+            "current_stage": "lyrics_draft",
+            "stage_status": "not_started",
+            "locked_hook": "old hook",
+            "current_structure_route": "classic_pop",
+            "current_prompt_pack_id": None,
+        },
+    ).json()
+    first_version = client.get(f"/api/songs/{song['id']}/versions").json()[-1]
+    updated = client.put(
+        f"/api/songs/{song['id']}",
+        json={
+            **song,
+            "lyrics": "new lyric",
+            "locked_hook": "new hook",
+            "current_stage": "suno_prompt_lab",
+            "change_summary": "mutate before restore",
+        },
+    )
+    assert updated.status_code == 200
+
+    restored = client.post(f"/api/songs/{song['id']}/versions/{first_version['id']}/restore")
+    assert restored.status_code == 200
+    data = restored.json()
+    assert data["lyrics"] == "old lyric"
+    assert data["locked_hook"] == "old hook"
+    assert data["current_stage"] == "lyrics_draft"
+    versions = client.get(f"/api/songs/{song['id']}/versions").json()
+    assert versions[0]["change_type"] == "restore"
+    assert "回溯到" in versions[0]["summary"]
 
 
 def test_generation_review_and_asset_bundle(client, access_song):
