@@ -502,6 +502,77 @@ textarea.tall {
   background: #fff1f3;
 }
 
+.hook-version-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+.hook-set-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hook-version-item {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfaf6;
+}
+
+.hook-version-item.recommended {
+  border-color: var(--active);
+  box-shadow: 0 0 0 1px rgba(23, 107, 98, 0.12);
+}
+
+.hook-version-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hook-version-head p,
+.hook-version-grid p,
+.hook-set-note {
+  color: var(--muted);
+}
+
+.hook-version-head p,
+.hook-version-grid p {
+  margin: 3px 0 0;
+}
+
+.hook-version-head span,
+.hook-version-grid span {
+  color: var(--active);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.hook-text {
+  margin: 9px 0;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.hook-version-grid {
+  display: grid;
+  gap: 7px;
+}
+
+.board .hook-version-item {
+  background: #191c20;
+  border-color: #3a4048;
+}
+
+.board .hook-version-head p,
+.board .hook-version-grid p,
+.board .hook-set-note {
+  color: #c7ccd1;
+}
+
 .prompt-pack-list {
   display: grid;
   gap: 12px;
@@ -625,6 +696,71 @@ textarea.tall {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 8px;
+}
+
+.version-select-wrap {
+  margin-bottom: 9px;
+}
+
+.board .version-select-wrap select {
+  color: #f5f1e8;
+  background: #191c20;
+  border-color: #3a4048;
+}
+
+.version-detail-card {
+  padding: 11px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #22262c;
+}
+
+.version-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.version-detail-head p {
+  margin: 4px 0 0;
+  color: #aeb5bc;
+}
+
+.version-detail-head span {
+  color: #7bbfb4;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.version-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.version-detail-grid div,
+.version-mini-preview {
+  padding: 8px;
+  border-radius: 7px;
+  background: #191c20;
+}
+
+.version-detail-grid span,
+.version-mini-preview span {
+  display: block;
+  color: #aeb5bc;
+  font-size: 12px;
+}
+
+.version-detail-grid strong,
+.version-mini-preview p {
+  margin: 3px 0 0;
+  word-break: break-word;
+}
+
+.version-mini-preview {
   margin-top: 8px;
 }
 

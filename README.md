@@ -34,6 +34,8 @@ The main production flow now tries to use DeepSeek first in the creative stages 
 
 Lyrics drafts now pass through a local quality gate after the DeepSeek call. The app scores hook preservation, concrete song material, section readability, cliche risk, and prompt leakage. Weak drafts trigger one automatic AI rewrite, and the resulting artifact shows a visible quality score plus the main issues.
 
+Hook Lab outputs are versioned directions, not a flat list of near-duplicates. Each Hook candidate includes a version label, creative angle, innovation score, use case, rhythm notes, and Suno risk. Re-running Hook Lab passes previous candidates back into the flow so the next run avoids repeating the same Hook set.
+
 If DeepSeek is unavailable or returns invalid structured output, the app falls back to local deterministic drafts and marks the artifact as `本地草稿` in the UI. AI-generated artifacts are marked as `AI 生成`.
 
 `Suno Prompt 实验室` remains rule-led for quality control: it uses the accepted Hook, structure route, accepted lyrics, song concept, EP function, mood, and BPM to build copyable `Style Prompt` and `Lyrics Prompt` packs. Each pack exposes a style specificity score and quality checks so the prompt does not collapse into a generic style template.
@@ -88,7 +90,7 @@ Open <http://127.0.0.1:8000>.
 
 - 有待确认产物时，系统会阻止进入下一阶段，避免创作决定丢失。
 - `生成可复制到 Suno 的提示词` 会检查 Hook、结构路线和歌词草稿是否齐全；缺材料时会提示先补哪一项。
-- 右侧 `版本记录` 每张卡都可以 `查看快照`，也可以 `回溯到此版本`。回溯不会删除历史，而是恢复该快照并新增一条回溯版本。
+- 右侧 `版本记录` 用下拉列表选择版本；选中后会显示阶段、Hook、结构、BPM、歌词预览和 Style 预览。回溯不会删除历史，而是恢复该快照并新增一条回溯版本。
 - V1 不伪装成音频分析器；Suno 结果复盘以你的文字反馈、评分和上传素材为准。
 
 ## DeepSeek

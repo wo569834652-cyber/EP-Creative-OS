@@ -1,6 +1,7 @@
 import json
 import re
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.llm.deepseek_client import DeepSeekClient
@@ -161,7 +162,14 @@ def _lyrics_retry_prompt(context: dict, lyrics: str, quality: dict) -> str:
     )
 
 
-def _context_payload(song: Song, ep: EPState, stage: str, user_goal: str, user_message: str) -> dict:
+def _context_payload(
+    song: Song,
+    ep: EPState,
+    stage: str,
+    user_goal: str,
+    user_message: str,
+    previous_hook_texts: list[str] | None = None,
+) -> dict:
     return {
         "stage": stage,
         "user_goal": user_goal,
@@ -189,6 +197,7 @@ def _context_payload(song: Song, ep: EPState, stage: str, user_goal: str, user_m
             "current_structure_route": song.current_structure_route,
             "notes": song.notes,
         },
+        "previous_hook_texts": previous_hook_texts or [],
     }
 
 
@@ -218,6 +227,10 @@ def _stage_prompt(stage: str, context: dict) -> str:
                         "rhythm_notes": "节奏/落拍/重复方式",
                         "suno_risk": "给 Suno 的风险",
                         "score": 1,
+                        "version_label": "A 稳定主线 / B 重复咒语 / C 画面钩子 等",
+                        "angle": "这个版本的创作角度",
+                        "innovation": 1,
+                        "use_case": "适合放在 Chorus / Post-Chorus / Bridge / Outro 的哪一种场景",
                     }
                 ],
                 "next_actions": ["2-4 个下一步动作"],
@@ -300,11 +313,12 @@ async def _try_ai_stage(
     stage: str,
     user_goal: str,
     user_message: str,
+    previous_hook_texts: list[str] | None = None,
 ) -> tuple[str, list[dict], list[str]] | None:
     if stage not in {"diagnosis", "hook_lab", "structure_lab", "lyrics_draft", "generation_review"}:
         return None
 
-    context = _context_payload(song, ep, stage, user_goal, user_message)
+    context = _context_payload(song, ep, stage, user_goal, user_message, previous_hook_texts)
     client = DeepSeekClient()
     ok, text = await client.chat(
         [
@@ -348,20 +362,52 @@ async def _try_ai_stage(
     if stage == "hook_lab":
         hooks = _as_list(data.get("hooks"))
         normalized_hooks = []
+        seen_hook_texts = set()
         for index, hook in enumerate(hooks[:5]):
             if not isinstance(hook, dict):
                 continue
+            hook_text = str(hook.get("hook_text") or "").strip()
+            if not hook_text or hook_text.lower() in seen_hook_texts:
+                continue
+            seen_hook_texts.add(hook_text.lower())
             normalized_hooks.append(
                 {
-                    "hook_text": str(hook.get("hook_text") or "").strip(),
+                    "hook_text": hook_text,
                     "why_it_works": hook.get("why_it_works") or "",
                     "rhythm_notes": hook.get("rhythm_notes") or "",
                     "suno_risk": hook.get("suno_risk") or "",
                     "score": int(hook.get("score") or max(60, 90 - index * 5)),
+                    "version_label": hook.get("version_label") or f"AI 版本 {index + 1}",
+                    "angle": hook.get("angle") or "AI 提供的 Hook 方向",
+                    "innovation": int(hook.get("innovation") or 2),
+                    "use_case": hook.get("use_case") or "用于测试副歌记忆点。",
                 }
             )
-        recommended = data.get("recommended_hook") or (normalized_hooks[0]["hook_text"] if normalized_hooks else _short_hook_seed(song))
-        content = {"hooks": normalized_hooks, "recommended_hook": recommended, **source}
+        if len(normalized_hooks) < 3 or any(item["hook_text"] in (previous_hook_texts or []) for item in normalized_hooks):
+            local_hooks = generate_hooks(
+                song,
+                user_goal or "生成不同 Hook 版本",
+                song.genre_direction or song.emotional_goal or song.title,
+                song.language_plan or "中文+English",
+                5,
+                avoid_hooks=previous_hook_texts or [],
+                variation_seed=user_message,
+            )
+            for hook in local_hooks:
+                if hook.hook_text.lower() not in seen_hook_texts:
+                    normalized_hooks.append(hook.model_dump())
+                    seen_hook_texts.add(hook.hook_text.lower())
+                if len(normalized_hooks) >= 5:
+                    break
+        recommended = data.get("recommended_hook") if data.get("recommended_hook") not in (previous_hook_texts or []) else ""
+        recommended = recommended or (normalized_hooks[0]["hook_text"] if normalized_hooks else _short_hook_seed(song))
+        content = {
+            "hooks": normalized_hooks[:5],
+            "recommended_hook": recommended,
+            "selection_note": "每个 Hook 都是一个版本方向；重试时会避开已生成过的候选。",
+            "avoid_previous_hooks": previous_hook_texts or [],
+            **source,
+        }
         artifacts = [
             {
                 "artifact_type": "hook_set",
@@ -515,18 +561,31 @@ def _diagnosis(song: Song, ep: EPState) -> tuple[str, list[dict], list[str]]:
     return message, artifacts, next_actions
 
 
-def _hook_lab(song: Song) -> tuple[str, list[dict], list[str]]:
+def _hook_lab(song: Song, previous_hook_texts: list[str] | None = None, variation_seed: str = "") -> tuple[str, list[dict], list[str]]:
     if _is_access_failure_song(song):
         hook_goal = "短、重复、带访问失败和旧关系门外感"
         style_reference = "access denied / never try again"
     else:
         hook_goal = f"短、重复、可唱，围绕《{song.title}》和核心画面：{_core_material(song)}"
         style_reference = song.genre_direction or song.emotional_goal or song.title
-    hooks = generate_hooks(song, hook_goal, style_reference, song.language_plan or "中文+English", 5)
+    hooks = generate_hooks(
+        song,
+        hook_goal,
+        style_reference,
+        song.language_plan or "中文+English",
+        5,
+        avoid_hooks=previous_hook_texts or [],
+        variation_seed=variation_seed,
+    )
     hook_dicts = [hook.model_dump() for hook in hooks]
     recommended = hook_dicts[0]["hook_text"] if hook_dicts else _short_hook_seed(song)
-    content = {"hooks": hook_dicts, "recommended_hook": recommended}
-    message = f"Hook 实验室给出 {len(hook_dicts)} 个短句方案。推荐先锁定 `{recommended}`，因为它最容易被 Suno 重复并记住。"
+    content = {
+        "hooks": hook_dicts,
+        "recommended_hook": recommended,
+        "selection_note": "A/B/C/D/E 是不同 Hook 方向，不是同一句话的重复包装。重试时会避开旧候选。",
+        "avoid_previous_hooks": previous_hook_texts or [],
+    }
+    message = f"Hook 实验室给出 {len(hook_dicts)} 个版本方向。推荐先测试 `{recommended}`；如果你要创新，可以优先听创新度 3 以上的版本。"
     artifacts = [
         {
             "artifact_type": "hook_set",
@@ -767,11 +826,17 @@ def _asset_organizer(song: Song) -> tuple[str, list[dict], list[str]]:
     return message, artifacts, ["上传 Suno 文件", "导出素材包"]
 
 
-def build_stage_output(song: Song, ep: EPState, stage: str) -> tuple[str, list[dict], list[str]]:
+def build_stage_output(
+    song: Song,
+    ep: EPState,
+    stage: str,
+    previous_hook_texts: list[str] | None = None,
+    variation_seed: str = "",
+) -> tuple[str, list[dict], list[str]]:
     if stage == "diagnosis":
         return _diagnosis(song, ep)
     if stage == "hook_lab":
-        return _hook_lab(song)
+        return _hook_lab(song, previous_hook_texts, variation_seed)
     if stage == "structure_lab":
         return _structure_lab(song)
     if stage == "lyrics_draft":
@@ -800,12 +865,13 @@ async def build_stage_output_with_ai(
     stage: str,
     user_goal: str,
     user_message: str,
+    previous_hook_texts: list[str] | None = None,
 ) -> tuple[str, list[dict], list[str]]:
-    ai_output = await _try_ai_stage(song, ep, stage, user_goal, user_message)
+    ai_output = await _try_ai_stage(song, ep, stage, user_goal, user_message, previous_hook_texts)
     if ai_output:
         return ai_output
 
-    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage)
+    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage, previous_hook_texts, user_message)
     _mark_fallback(artifact_payloads)
     if stage in {"diagnosis", "hook_lab", "structure_lab", "lyrics_draft", "generation_review"}:
         message = f"AI 本阶段生成不可用，已临时使用本地规则草稿。\n\n{message}"
@@ -840,7 +906,28 @@ async def create_session_with_artifacts(
     user_goal: str,
     user_message: str,
 ) -> CreativeSession:
-    message, artifact_payloads, next_actions = await build_stage_output_with_ai(song, ep, stage, user_goal, user_message)
+    previous_hook_texts: list[str] = []
+    if stage == "hook_lab":
+        previous_artifacts = db.scalars(
+            select(CreativeArtifact)
+            .where(CreativeArtifact.song_id == song.id)
+            .where(CreativeArtifact.artifact_type == "hook_set")
+            .order_by(CreativeArtifact.created_at.desc())
+        ).all()
+        for artifact in previous_artifacts:
+            for hook in artifact.content.get("hooks", []):
+                if isinstance(hook, dict) and hook.get("hook_text"):
+                    previous_hook_texts.append(str(hook["hook_text"]))
+        previous_hook_texts = list(dict.fromkeys(previous_hook_texts))[:20]
+
+    message, artifact_payloads, next_actions = await build_stage_output_with_ai(
+        song,
+        ep,
+        stage,
+        user_goal,
+        user_message,
+        previous_hook_texts,
+    )
     session = CreativeSession(
         song_id=song.id,
         stage=stage,

@@ -153,6 +153,10 @@ class HookOption(BaseModel):
     rhythm_notes: str
     suno_risk: str
     score: int
+    version_label: str = ""
+    angle: str = ""
+    innovation: int = 1
+    use_case: str = ""
 
 
 class HookResponse(BaseModel):

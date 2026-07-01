@@ -112,6 +112,60 @@ def test_v1_session_creates_pending_artifact(client, access_song):
     client.post(f"/api/artifacts/{data['artifacts'][0]['id']}/discard")
 
 
+def test_hook_lab_generates_versioned_variants_and_avoids_previous(client):
+    ep = client.post(
+        "/api/eps",
+        json={
+            "title": "HOOK VERSION EP",
+            "one_liner": "测试 Hook 版本",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    ).json()
+    song = client.post(
+        "/api/songs",
+        json={
+            "ep_id": ep["id"],
+            "title": "夜班电梯",
+            "function_in_ep": "从现实疲惫转入旧关系",
+            "concept": "凌晨电梯里的人不想回家，也不想再解释",
+            "emotional_goal": "低电量、克制、麻木",
+            "bpm": 92,
+            "genre_direction": "bedroom pop / lo-fi electronic",
+            "language_plan": "",
+            "lyrics": "",
+            "style_prompt": "",
+            "lyrics_prompt": "",
+            "notes": "",
+            "current_stage": "hook_lab",
+            "stage_status": "not_started",
+            "locked_hook": "",
+            "current_structure_route": "",
+            "current_prompt_pack_id": None,
+        },
+    ).json()
+
+    first = client.post(f"/api/songs/{song['id']}/sessions", json={"user_message": "先给一组稳定和创新 Hook"}).json()
+    first_hooks = first["artifacts"][0]["content"]["hooks"]
+    assert len(first_hooks) >= 5
+    assert len({hook["hook_text"] for hook in first_hooks}) == len(first_hooks)
+    assert all(hook["version_label"] for hook in first_hooks)
+    assert all(hook["angle"] for hook in first_hooks)
+    assert any(hook["innovation"] >= 3 for hook in first_hooks)
+
+    second = client.post(f"/api/songs/{song['id']}/sessions", json={"user_message": "再换一组，不要重复上一轮"}).json()
+    second_hooks = second["artifacts"][0]["content"]["hooks"]
+    first_texts = {hook["hook_text"] for hook in first_hooks}
+    second_texts = {hook["hook_text"] for hook in second_hooks}
+    assert second["artifacts"][0]["content"]["avoid_previous_hooks"]
+    assert second_texts != first_texts
+
+
 def test_ai_lyrics_stage_creates_real_lyrics_artifact(client, access_song, monkeypatch):
     async def fake_chat(self, messages, temperature=0.7, max_tokens=1200, json_mode=False):
         return (

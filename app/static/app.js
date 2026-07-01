@@ -8,6 +8,7 @@ let artifacts = [];
 let versions = [];
 let assets = [];
 let lastSession = null;
+let selectedVersionId = null;
 let stageRunning = false;
 let sunoRunning = false;
 let reviewSaving = false;
@@ -129,6 +130,15 @@ function promptPackQuality(pack) {
   return `<p class="${failed.length ? "prompt-source-warn" : "prompt-source-ok"}">Style 具体度 ${pack.style_specificity_score}/100${failed.length ? `，待补：${failed.slice(0, 2).join("、")}` : "，检查通过"}</p>`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function copyText(text) {
   if (!text) return;
   navigator.clipboard?.writeText(text).then(
@@ -153,6 +163,39 @@ function modal(id, open) {
     const firstInput = el.querySelector("input, textarea, button");
     firstInput?.focus();
   }
+}
+
+function hookSetView(artifact) {
+  const content = artifact.content || {};
+  const hooks = content.hooks || [];
+  if (!hooks.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "hook-version-list";
+  const note = document.createElement("p");
+  note.className = "hook-set-note";
+  note.textContent = content.selection_note || "每个 Hook 是一个可测试版本方向。";
+  wrap.append(note);
+  hooks.forEach((hook, index) => {
+    const item = document.createElement("section");
+    item.className = `hook-version-item ${hook.hook_text === content.recommended_hook ? "recommended" : ""}`;
+    item.innerHTML = `
+      <div class="hook-version-head">
+        <div>
+          <strong>${escapeHtml(hook.version_label || `版本 ${index + 1}`)}${hook.hook_text === content.recommended_hook ? " / 推荐" : ""}</strong>
+          <p>${escapeHtml(hook.angle || hook.why_it_works || "")}</p>
+        </div>
+        <span>分数 ${Number(hook.score || 0)} · 创新 ${Number(hook.innovation || 1)}</span>
+      </div>
+      <p class="hook-text">${escapeHtml(hook.hook_text || "")}</p>
+      <div class="hook-version-grid">
+        <div><span>适用</span><p>${escapeHtml(hook.use_case || "")}</p></div>
+        <div><span>节奏</span><p>${escapeHtml(hook.rhythm_notes || "")}</p></div>
+        <div><span>Suno 风险</span><p>${escapeHtml(hook.suno_risk || "")}</p></div>
+      </div>
+    `;
+    wrap.append(item);
+  });
+  return wrap;
 }
 
 function promptPackView(artifact) {
@@ -351,6 +394,11 @@ function artifactCard(artifact, pending = false) {
     if (preview) preview.remove();
     const view = promptPackView(artifact);
     if (view) card.append(view);
+  } else if (artifact.artifact_type === "hook_set") {
+    const preview = card.querySelector(".artifact-preview");
+    if (preview) preview.remove();
+    const view = hookSetView(artifact);
+    if (view) card.append(view);
   } else if (artifact.artifact_type === "lyrics_draft" && artifact.content?.lyrics) {
     const preview = card.querySelector(".artifact-preview");
     if (preview) {
@@ -414,27 +462,65 @@ function renderVersions() {
     box.innerHTML = `<div class="muted">还没有版本记录。</div>`;
     return;
   }
+  if (!selectedVersionId || !versions.some((version) => version.id === selectedVersionId)) {
+    selectedVersionId = versions[0].id;
+  }
+  const selected = versions.find((version) => version.id === selectedVersionId) || versions[0];
+  const snapshot = selected.content_snapshot || {};
+  const selectWrap = document.createElement("div");
+  selectWrap.className = "version-select-wrap";
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "选择版本");
   versions.forEach((version) => {
-    const item = document.createElement("div");
-    item.className = "version-card";
-    const snapshot = version.content_snapshot || {};
-    item.innerHTML = `
-      <strong>v${version.version_number}</strong><br>
-      <span class="muted">${version.summary || version.change_summary || version.change_type}</span>
-      <div class="version-actions"></div>
-      <pre class="version-snapshot" hidden>${versionSnapshot(version)}</pre>
-    `;
-    const actions = item.querySelector(".version-actions");
-    const snapshotEl = item.querySelector(".version-snapshot");
-    const toggle = button("查看快照", () => {
-      snapshotEl.hidden = !snapshotEl.hidden;
-      toggle.textContent = snapshotEl.hidden ? "查看快照" : "收起快照";
-    });
-    const restore = button("回溯到此版本", () => restoreVersion(version.id));
-    restore.disabled = Boolean(currentSong && snapshot.title === currentSong.title && snapshot.lyrics === currentSong.lyrics && snapshot.current_stage === currentSong.current_stage);
-    actions.append(toggle, restore);
-    box.append(item);
+    const option = document.createElement("option");
+    option.value = version.id;
+    option.selected = version.id === selected.id;
+    option.textContent = `v${version.version_number} · ${version.summary || version.change_summary || version.change_type}`;
+    select.append(option);
   });
+  select.onchange = (event) => {
+    selectedVersionId = Number(event.target.value);
+    renderVersions();
+  };
+  selectWrap.append(select);
+
+  const detail = document.createElement("div");
+  detail.className = "version-detail-card";
+  detail.innerHTML = `
+    <div class="version-detail-head">
+      <div>
+        <strong>v${selected.version_number}</strong>
+        <p>${escapeHtml(selected.summary || selected.change_summary || selected.change_type)}</p>
+      </div>
+      <span>${escapeHtml(selected.change_type || "full")}</span>
+    </div>
+    <div class="version-detail-grid">
+      <div><span>阶段</span><strong>${escapeHtml(stageLabels[snapshot.current_stage] || snapshot.current_stage || "未记录")}</strong></div>
+      <div><span>Hook</span><strong>${escapeHtml(snapshot.locked_hook || "未锁定")}</strong></div>
+      <div><span>结构</span><strong>${escapeHtml(snapshot.current_structure_route || "未选择")}</strong></div>
+      <div><span>BPM</span><strong>${escapeHtml(snapshot.bpm || "")}</strong></div>
+    </div>
+    <div class="version-mini-preview">
+      <span>歌词</span>
+      <p>${escapeHtml(snapshot.lyrics ? snapshot.lyrics.slice(0, 180) : "暂无歌词")}</p>
+    </div>
+    <div class="version-mini-preview">
+      <span>Style</span>
+      <p>${escapeHtml(snapshot.style_prompt ? snapshot.style_prompt.slice(0, 180) : "暂无 Style Prompt")}</p>
+    </div>
+    <div class="version-actions"></div>
+    <pre class="version-snapshot" hidden>${escapeHtml(versionSnapshot(selected))}</pre>
+  `;
+  const actions = detail.querySelector(".version-actions");
+  const snapshotEl = detail.querySelector(".version-snapshot");
+  const toggle = button("查看完整快照", () => {
+    snapshotEl.hidden = !snapshotEl.hidden;
+    toggle.textContent = snapshotEl.hidden ? "查看完整快照" : "收起完整快照";
+  });
+  const restore = button("回溯到此版本", () => restoreVersion(selected.id));
+  restore.disabled = Boolean(currentSong && snapshot.title === currentSong.title && snapshot.lyrics === currentSong.lyrics && snapshot.current_stage === currentSong.current_stage);
+  actions.append(toggle, restore);
+  box.append(selectWrap, detail);
 }
 
 function versionSnapshot(version) {
@@ -524,6 +610,7 @@ async function loadAll() {
 
 async function selectSong(id) {
   currentSong = await api(`/api/songs/${id}`);
+  selectedVersionId = null;
   renderSongs();
   renderStageProgress();
   fillSongHeader();
@@ -533,6 +620,7 @@ async function selectSong(id) {
 async function selectProject(id) {
   currentEpId = Number(id);
   currentSong = null;
+  selectedVersionId = null;
   await loadAll();
 }
 
