@@ -1,194 +1,332 @@
-from app.models import Song
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import CreativeArtifact, Song
+from app.services.suno_feedback import summarize_generation_reviews
+from app.services.suno_routes import get_route_spec
+from app.services.suno_spec import LANGUAGE_LABELS, normalize_song_to_music_spec
+from app.services.suno_validation import (
+    merge_validations,
+    validate_exclude_prompt,
+    validate_lyrics_prompt,
+    validate_pack_consistency,
+    validate_style_prompt,
+)
 
 
-FORBIDDEN_STYLE_TERMS = ["Mandarin", "Chinese", "普通话", "中文", "language-focused", "literary synopsis"]
+FORBIDDEN_STYLE_TERMS = LANGUAGE_LABELS
 
 
-def _genre_parts(song: Song) -> tuple[str, str]:
-    direction = song.genre_direction or "minimal alternative pop / electronic ballad"
-    parts = [part.strip() for part in direction.replace(",", "/").split("/") if part.strip()]
-    primary = parts[0] if parts else "minimal alternative pop"
-    secondary = parts[1] if len(parts) > 1 else "electronic ballad"
-    return primary, secondary
+VARIANTS = [
+    {
+        "variant": "primary",
+        "variant_role": "safe",
+        "settings": {"weirdness": 30, "style_influence": 78, "audio_influence": None},
+        "style_shift": "keep the most stable brief-faithful palette",
+        "groove_shift": "steady dry kick and soft snare pocket",
+        "instrument_shift": "muted electric piano leads the harmony",
+        "lyric_shift": "clarity first, chorus hook repeated plainly",
+    },
+    {
+        "variant": "alternate",
+        "variant_role": "bold",
+        "settings": {"weirdness": 46, "style_influence": 70, "audio_influence": None},
+        "style_shift": "change one or two variables: add sharper syncopation and a more tactile motif",
+        "groove_shift": "sharper syncopated hats, lighter kick, tactile percussion clicks",
+        "instrument_shift": "replace some keys with plucked synth and a small glassy motif",
+        "lyric_shift": "slightly stronger pre-chorus lift and more memorable hook entrance",
+    },
+    {
+        "variant": "experimental",
+        "variant_role": "minimal",
+        "settings": {"weirdness": 24, "style_influence": 64, "audio_influence": None},
+        "style_shift": "shorter, drier, fewer layers, faster to test",
+        "groove_shift": "minimal pulse, fewer drum events, more silence before hook returns",
+        "instrument_shift": "remove pad density and leave bass, dry vocal, and one echo motif",
+        "lyric_shift": "minimal labels, shorter lines, one clean echo",
+    },
+]
 
 
-def _base_hook(song: Song) -> str:
-    if song.locked_hook:
-        return song.locked_hook
-    if "访问失败" in song.title:
-        return "access denied"
-    title = (song.title or "").strip()
-    if title:
-        return title if len(title) <= 12 else title[:12]
-    return "别停下"
-
-
-def _compact(value: str | None, fallback: str, limit: int = 120) -> str:
+def _compact(value: str | None, fallback: str, limit: int = 180) -> str:
     text = " ".join((value or "").split())
-    if not text:
-        return fallback
-    return text[:limit]
+    return (text or fallback)[:limit]
 
 
-def _sonic_identity(song: Song, variant: str) -> str:
-    concept = _compact(song.concept, song.title or "unfinished memory")
-    function = _compact(song.function_in_ep, "a transitional EP track")
-    emotion = _compact(song.emotional_goal, "restrained, unresolved, intimate")
-    if variant == "experimental":
-        return (
-            f"sonic identity: translate `{concept}` into a colder repeated motif; EP function: {function}; "
-            f"emotional target: {emotion}; use small system-like details as rhythm, not as spoken exposition"
-        )
-    if variant == "alternate":
-        return (
-            f"sonic identity: keep `{concept}` personal and close, but make the hook easier to remember; "
-            f"EP function: {function}; emotional target: {emotion}; avoid decorative drama"
-        )
+def _accepted_artifacts(db: Session | None, song: Song) -> list[CreativeArtifact]:
+    if db is None:
+        return []
+    return list(
+        db.scalars(
+            select(CreativeArtifact)
+            .where(CreativeArtifact.song_id == song.id)
+            .where(CreativeArtifact.status == "accepted")
+            .order_by(CreativeArtifact.updated_at.desc())
+        ).all()
+    )
+
+
+def _hook(song: Song, music_spec: dict) -> str:
+    if music_spec.get("accepted_hook"):
+        return str(music_spec["accepted_hook"])
+    title = (song.title or "").strip()
+    return title[:18] if title else "stay with me"
+
+
+def _route(song: Song, variant: str) -> dict:
+    route = song.current_structure_route or "classic_pop"
+    if variant == "experimental" and route == "classic_pop":
+        route = "through_composed"
+    return get_route_spec(route)
+
+
+def _feedback_clause(feedback_summary: dict) -> str:
+    if not feedback_summary.get("review_count"):
+        return "feedback loop: prior generation review unavailable."
+    return f"feedback loop: {feedback_summary.get('next_revision_bias') or 'use recent review notes to keep the next test focused'}."
+
+
+def _style_prompt(song: Song, music_spec: dict, route_spec: dict, variant_config: dict, feedback_summary: dict) -> str:
+    instrumentation = ", ".join(music_spec["instrumentation"])
+    textures = ", ".join(music_spec["production_texture"])
+    harmony = ", ".join(music_spec["harmony_palette"])
     return (
-        f"sonic identity: make `{concept}` feel like a usable song scene, not a summary; "
-        f"EP function: {function}; emotional target: {emotion}; keep the production intimate and executable"
+        f"Track title: {song.title or 'untitled'}; "
+        f"primary genre: {music_spec['primary_genre']}; secondary genre: {music_spec['secondary_genre']}; "
+        f"BPM: {music_spec['bpm']}; tempo feel: {music_spec['tempo_feel']}; "
+        f"use case: {_compact(song.function_in_ep, 'EP production track')}; "
+        f"mood: {music_spec['mood']}; "
+        f"vocal direction: {music_spec['vocal_type']}, {music_spec['vocal_delivery']}; "
+        f"instrumentation: {instrumentation}; "
+        f"groove/drums: {music_spec['rhythm_groove']}; "
+        f"bass/low-end: {music_spec['bass_behavior']}; "
+        f"harmony/instrument palette: {harmony}; "
+        f"production texture: {textures}; "
+        f"arrangement movement: {route_spec['arrangement_motion']}; "
+        f"variant behavior: {variant_config['style_shift']}; "
+        f"variant groove: {variant_config['groove_shift']}; "
+        f"variant instrumentation: {variant_config['instrument_shift']}; "
+        f"mix/space: {music_spec['mix_space']}; energy curve: {music_spec['energy_curve']}; "
+        f"{_feedback_clause(feedback_summary)} "
+        "production constraints: readable section changes, singable chorus, original-reference-safe palette."
     )
 
 
-def _arrangement_motion(route_label: str, variant: str) -> str:
-    if route_label == "loop_mantra" or variant == "experimental":
-        return "arrangement movement: loop-based intro, one motif mutates every 8 bars, no traditional big lift, final hook becomes thinner not bigger"
-    if route_label == "classic_pop":
-        return "arrangement movement: verse stays narrow, pre-chorus removes low end, chorus adds one doubled vocal and one higher pad, bridge strips drums"
-    if route_label == "contrast_turn":
-        return "arrangement movement: cold open exposes the hook, verse drops density, chorus pivots into a tighter pulse, bridge changes texture only once"
-    return "arrangement movement: start with a small denial motif, verse adds room tone, pre-chorus tightens pulse, chorus repeats hook without a stadium lift"
+def _section_delivery_notes(route_spec: dict, feedback_summary: dict) -> list[str]:
+    lines = []
+    hook_problem = "hook_clarity" in (feedback_summary.get("recurring_problems") or [])
+    for section in route_spec["section_map"]:
+        instruction = section["hook_instruction"]
+        if hook_problem and "hook" in instruction.lower():
+            instruction += "; strengthen hook repetition and chorus clarity"
+        lines.append(f"{section['label']}: {section['purpose']}; {section['delivery']}; {instruction}")
+    return lines
 
 
-def _style_specificity_score(style_prompt: str, song: Song) -> int:
-    score = 40
-    required_terms = ["sonic identity", "arrangement movement", "groove/drums", "bass", "vocal direction", "mix/space", "forbidden terms"]
-    score += sum(7 for term in required_terms if term in style_prompt)
-    if song.title and song.title in style_prompt:
-        score += 6
-    if song.concept and _compact(song.concept, "", 24)[:4] in style_prompt:
-        score += 8
-    if song.function_in_ep and _compact(song.function_in_ep, "", 24)[:4] in style_prompt:
-        score += 5
-    return max(0, min(100, score))
-
-
-def _quality_checks(style_prompt: str, lyrics_prompt: str, hook: str) -> list[dict]:
-    checks = [
-        ("Style Prompt 不含语言标签", not any(term in style_prompt for term in FORBIDDEN_STYLE_TERMS)),
-        ("包含 BPM", "BPM" in style_prompt),
-        ("包含 groove/drums", "groove" in style_prompt and "drums" in style_prompt),
-        ("包含 bass", "bass" in style_prompt),
-        ("包含 vocal direction", "vocal direction" in style_prompt),
-        ("包含 sonic identity", "sonic identity" in style_prompt),
-        ("包含 arrangement movement", "arrangement movement" in style_prompt),
-        ("包含 mix/space", "mix/space" in style_prompt),
-        ("Lyrics Prompt 包含 Hook", hook in lyrics_prompt),
-        ("包含 negative terms", "negative" in style_prompt.lower() or "forbidden" in style_prompt.lower()),
-        ("包含修正策略", "Revision target" in lyrics_prompt),
-    ]
-    return [{"label": label, "passed": passed} for label, passed in checks]
-
-
-def _pack(song: Song, variant: str, recommended: bool, route: str, mood_shift: str) -> dict:
-    primary, secondary = _genre_parts(song)
-    bpm = song.bpm or 88
-    hook = _base_hook(song)
-    route_label = route or song.current_structure_route or "error_system"
-    style_prompt = (
-        f"Track title: {song.title or 'untitled'}; primary genre: {primary}; secondary genre: {secondary}; BPM: {bpm}; "
-        f"{_sonic_identity(song, variant)}; "
-        "groove/drums: restrained mid-tempo pulse, dry kick, soft snare, sparse glitch ticks, no big drop; "
-        "bass: warm sub bass with a simple pressure pattern that answers the hook, not a busy riff; "
-        "harmony/instrument palette: muted electric piano, narrow synth pad, low system hum, one small motif tied to the song scene; "
-        "vocal direction: close intimate lead, controlled breath, slightly tired consonants, doubled hook only on the second repeat; "
-        f"{_arrangement_motion(route_label, variant)}; "
-        f"mood: {song.emotional_goal or 'cold, stuck, intimate, unresolved'} {mood_shift}; "
-        "mix/space: dry lead vocal, small room, low-volume background artifacts, leave silence before the first hook repeat; "
-        "production constraints: sections must stay readable, chorus must not turn into a spoken essay; "
-        "forbidden terms: no language labels, no cinematic trailer, no EDM drop, no rock anthem, no motivational anthem."
-    )
-
-    if route_label == "error_system":
-        section_map = [
-            ("[System Intro]", "2-4 bars, machine hum and a small denial motif."),
-            ("[Verse - Cache]", "Concrete old chat / old room images, half-sung with short rests."),
-            ("[Pre-Chorus - Retry]", "Shorter lines, rising tension, one repeated command-like phrase."),
-            ("[Chorus - Access Failure]", f"Use the hook: {hook}. Repeat it, then answer with 可我停在你之外."),
-            ("[Bridge - Old Version]", "Spoken or half-sung reflection; do not explain every metaphor."),
-            ("[Final Chorus]", f"Return to {hook}, add a second voice with never try again."),
-            ("[Outro]", "Fade on a failed-login phrase and room tone."),
-        ]
-    else:
-        section_map = [
-            ("[Intro]", "2-4 bars, establish pulse and motif."),
-            ("[Verse]", "Concrete image, low vocal, leave rests."),
-            ("[Chorus]", f"Short hook: {hook}. Repeat with one variation."),
-            ("[Bridge]", "Half-sung reflection, minimal arrangement."),
-            ("[Final Chorus]", "Return to hook with restrained doubles."),
-            ("[Outro]", "Unresolved final fragment."),
-        ]
-
+def _lyrics_prompt(song: Song, music_spec: dict, route_spec: dict, variant_config: dict, feedback_summary: dict, hook: str) -> str:
+    hook_repeats = 3 if "hook_clarity" in (feedback_summary.get("recurring_problems") or []) else 2
     if song.lyrics.strip():
-        lyrics_prompt = "\n".join(
-            [
-                "[Use these lyrics as the primary lyric source]",
-                song.lyrics.strip(),
-                "",
-                "[Global vocal direction]",
-                "Close, restrained, intimate. Keep the hook short and repeatable. Preserve the written lyric meaning; do not replace it with generic filler.",
-                "",
-                "[Section delivery notes]",
-            ]
-            + [f"{label}\n{body}" for label, body in section_map]
-            + [
-                "[Revision target]",
-                "If the hook is not clear, simplify the chorus first. If the style drifts, adjust groove and instrument palette before changing lyrics.",
-            ]
-        )
-    else:
-        lyrics_prompt = "\n".join(
-            [
-                "[Lyric drafting mode]",
-                "No accepted full lyric draft is available yet. Use the section notes below as a temporary writing scaffold, not as final lyrics.",
-                "[Global vocal direction]\nClose, restrained, intimate. Keep the hook short and repeatable.",
-            ]
-            + [f"{label}\n{body}" for label, body in section_map]
-            + [
-                "[Revision target]\nIf the hook is not clear, simplify the chorus first. If the style drifts, adjust groove and instrument palette before changing lyrics."
-            ]
-        )
+        lyrics = song.lyrics.strip()
+        if hook and lyrics.count(hook) < hook_repeats:
+            lyrics = f"{lyrics}\n\n[Chorus]\n" + "\n".join([hook] * hook_repeats)
+        return lyrics
 
-    return {
-        "variant": variant,
-        "recommended": recommended,
-        "recommendation_reason": "主线版本最稳，Hook 位置清楚，结构能让 Suno 读懂错误系统的叙事。" if recommended else "作为对照版本，用来测试风格或结构边界。",
-        "style_prompt": style_prompt,
-        "lyrics_prompt": lyrics_prompt,
+    verse_seed = _compact(song.concept or song.function_in_ep, "late light in a small room", 80)
+    chorus_lines = "\n".join([hook] * hook_repeats)
+    if variant_config["variant_role"] == "minimal":
+        return f"""[Verse]
+{verse_seed}
+I leave the loud part out
+
+[Chorus]
+{chorus_lines}
+
+[Echo]
+{hook}"""
+    if route_spec["route"] == "through_composed":
+        return f"""[Opening]
+{verse_seed}
+
+[Development]
+I move the line before it settles
+
+[Echo Phrase]
+{hook}
+
+[Final Echo]
+{hook}"""
+    return "\n".join(
+        [
+            "[Verse]",
+            verse_seed,
+            "",
+            "[Pre-Chorus]",
+            "I keep the sentence small",
+            "I let the silence answer",
+            "",
+            "[Chorus]",
+            chorus_lines,
+            "",
+            "[Bridge]",
+            "one old image changes shape",
+            "",
+            "[Final Chorus]",
+            chorus_lines,
+        ]
+    )
+
+
+def _exclude_prompt(feedback_summary: dict, variant_role: str) -> str:
+    terms = [
+        "no artist imitation",
+        "no spoken essay verses",
+        "no arena rock chorus",
+        "no EDM drop",
+        "no muddy low-end",
+        "no excessive reverb on lead vocal",
+    ]
+    recurring = feedback_summary.get("recurring_problems") or []
+    if "heavy_drums" in recurring:
+        terms.append("avoid heavy drums, soften percussion density")
+    if "over_sweet_vocal" in recurring:
+        terms.append("avoid overly sweet vocal tone, keep vocal restrained")
+    if "unclear_verse_diction" in recurring:
+        terms.append("avoid long unclear verse lines")
+    if variant_role == "minimal":
+        terms.append("avoid extra percussion fills and decorative countermelodies")
+    return "; ".join(terms) + "."
+
+
+def _style_specificity_score(style_prompt: str, validation: dict) -> int:
+    anchor_terms = ["primary genre", "secondary genre", "BPM", "vocal direction", "instrumentation", "groove/drums", "bass/low-end", "mix/space", "arrangement movement"]
+    score = 35 + sum(6 for term in anchor_terms if term in style_prompt)
+    score += max(0, validation.get("score", 0) - 70) // 2
+    return max(0, min(100, int(score)))
+
+
+def _quality_checks(validation: dict) -> list[dict]:
+    checks = [{"label": item, "passed": True} for item in validation.get("passed_checks", [])]
+    checks.extend({"label": item, "passed": False} for item in validation.get("warnings", []))
+    checks.extend({"label": item, "passed": False} for item in validation.get("blocking_issues", []))
+    return checks
+
+
+def _pack(song: Song, music_spec: dict, route_spec: dict, variant_config: dict, feedback_summary: dict) -> dict:
+    hook = _hook(song, music_spec)
+    style = _style_prompt(song, music_spec, route_spec, variant_config, feedback_summary)
+    lyrics = _lyrics_prompt(song, music_spec, route_spec, variant_config, feedback_summary, hook)
+    exclude = _exclude_prompt(feedback_summary, variant_config["variant_role"])
+    style_validation = validate_style_prompt(style, music_spec)
+    lyrics_validation = validate_lyrics_prompt(lyrics, hook, route_spec)
+    exclude_validation = validate_exclude_prompt(exclude, style)
+    validation = merge_validations(style_validation, lyrics_validation, exclude_validation)
+    source_trace = {
+        "harness_stages": ["Brief", "Normalize", "Compose", "Validate", "Variant", "Package", "Learn", "Iterate"],
+        "hook": hook,
+        "structure_route": route_spec["route"],
         "lyrics_source": "accepted_song_lyrics" if song.lyrics.strip() else "temporary_structure_scaffold",
+        "feedback_used": feedback_summary.get("feedback_used", []),
+        "source_review_ids": [item.get("artifact_id") for item in feedback_summary.get("feedback_used", []) if item.get("artifact_id")],
+    }
+    pack = {
+        "variant": variant_config["variant"],
+        "variant_role": variant_config["variant_role"],
+        "recommended": False,
+        "recommendation_reason": "",
+        "music_spec": music_spec,
+        "route_spec": route_spec,
+        "style_prompt": style,
+        "lyrics_prompt": lyrics,
+        "exclude_prompt": exclude,
+        "advanced_settings": variant_config["settings"],
+        "validation": validation,
         "negative_terms": FORBIDDEN_STYLE_TERMS,
-        "hook_delivery_notes": f"Hook `{hook}` 必须短句重复，第一次冷，第二次加轻微叠唱。",
-        "section_control_notes": f"结构路线：{route_label}。段落标签服务生成稳定性，不等于固定模板。",
-        "revision_strategy": "Hook 不清楚就改 Lyrics Prompt；风格偏离就改 Style Prompt；段落混乱就减少标签和缩短副歌。",
-        "suno_risks": ["副歌句子过长会变成朗读", "Style Prompt 写语言标签会污染风格", "抽象概念堆叠会削弱可唱性"],
-        "quality_checks": _quality_checks(style_prompt, lyrics_prompt, hook),
-        "style_specificity_score": _style_specificity_score(style_prompt, song),
+        "hook_delivery_notes": f"Hook `{hook}` should be short, repeated, and placed where the route says it will be heard.",
+        "section_control_notes": f"Route `{route_spec['route']}`: {route_spec['stability_notes']}",
+        "revision_strategy": feedback_summary.get("next_revision_bias") or "If hook clarity fails, simplify the chorus first; if style drifts, adjust groove and instrument palette before rewriting lyrics.",
+        "suno_risks": route_spec.get("suno_risks", []),
+        "source_trace": source_trace,
+        "style_specificity_score": 0,
+        "quality_checks": [],
+        "lyrics_source": source_trace["lyrics_source"],
+        "feedback_summary": feedback_summary,
+        "lyrics_control_notes": _section_delivery_notes(route_spec, feedback_summary),
+    }
+    consistency = validate_pack_consistency(pack)
+    pack["validation"] = merge_validations(validation, consistency)
+    pack["style_specificity_score"] = _style_specificity_score(style, pack["validation"])
+    pack["quality_checks"] = _quality_checks(pack["validation"])
+    return pack
+
+
+def _recommend(packs: list[dict], feedback_summary: dict) -> dict:
+    scored = []
+    problems = set(feedback_summary.get("recurring_problems") or [])
+    for pack in packs:
+        validation_score = pack["validation"]["score"]
+        route_score = int(pack["route_spec"].get("stability_score", 5)) * 2
+        role_bonus = {"safe": 4, "bold": 2, "minimal": 1, "exploratory": 0}.get(pack["variant_role"], 0)
+        feedback_bonus = 0
+        if feedback_summary.get("review_count") and pack["source_trace"]["feedback_used"]:
+            if "heavy_drums" in problems or "production_unusable" in problems:
+                feedback_bonus += 5 if pack["variant_role"] == "minimal" else 1
+            if "style_drift" in problems:
+                feedback_bonus += 4 if pack["variant_role"] == "safe" else 2
+            if "hook_clarity" in problems:
+                feedback_bonus += int(pack["route_spec"].get("stability_score", 5))
+        blocking_penalty = 1000 if pack["validation"].get("blocking_issues") and any(
+            not candidate["validation"].get("blocking_issues") for candidate in packs
+        ) else 30 if pack["validation"].get("blocking_issues") else 0
+        scored.append((validation_score + route_score + role_bonus + feedback_bonus - blocking_penalty, pack))
+    scored.sort(key=lambda item: (item[0], item[1]["validation"]["score"]), reverse=True)
+    recommended = scored[0][1]
+    for _, pack in scored:
+        pack["recommended"] = pack is recommended
+        pack["recommendation_reason"] = (
+            f"Selected by validation score {pack['validation']['score']}, route stability {pack['route_spec'].get('stability_score', 0)}, "
+            f"role `{pack['variant_role']}`, and feedback fit."
+            if pack is recommended
+            else f"Kept as a comparison variant: {pack['variant_role']} changes a different musical variable."
+        )
+    return recommended
+
+
+def _refresh_post_recommend_validation(packs: list[dict]) -> None:
+    for pack in packs:
+        consistency = validate_pack_consistency(pack)
+        pack["validation"] = merge_validations(pack["validation"], consistency)
+        pack["style_specificity_score"] = _style_specificity_score(pack["style_prompt"], pack["validation"])
+        pack["quality_checks"] = _quality_checks(pack["validation"])
+
+
+def build_suno_prompt_packs(song: Song, db: Session | None = None) -> dict:
+    accepted = _accepted_artifacts(db, song)
+    feedback_summary = summarize_generation_reviews(db, song) if db is not None else {
+        "review_count": 0,
+        "winning_terms": [],
+        "blocked_terms": [],
+        "recurring_problems": [],
+        "next_revision_bias": "",
+        "feedback_used": [],
+    }
+    music_spec = normalize_song_to_music_spec(song, accepted, feedback_summary)
+    packs = []
+    for config in VARIANTS:
+        packs.append(_pack(song, music_spec, _route(song, config["variant"]), config, feedback_summary))
+    recommended = _recommend(packs, feedback_summary)
+    _refresh_post_recommend_validation(packs)
+    return {
+        "packs": packs[:3],
+        "recommended_variant": recommended["variant"],
+        "recommended_pack": recommended,
+        "feedback_summary": feedback_summary,
     }
 
 
-def build_suno_prompt_packs(song: Song) -> dict:
-    packs = [
-        _pack(song, "primary", True, song.current_structure_route or "error_system", "with a clean executable alt-pop shape"),
-        _pack(song, "alternate", False, "classic_pop", "slightly warmer and more hook-focused"),
-        _pack(song, "experimental", False, "loop_mantra", "colder, more repetitive, more system-like"),
-    ]
-    return {"packs": packs, "recommended_variant": "primary", "recommended_pack": packs[0]}
-
-
-def legacy_suno_response(song: Song):
+def legacy_suno_response(song: Song, db: Session | None = None):
     from app.schemas import SunoResponse
 
-    pack_data = build_suno_prompt_packs(song)
+    pack_data = build_suno_prompt_packs(song, db=db)
     pack = pack_data["recommended_pack"]
     return SunoResponse(
         title=song.title,

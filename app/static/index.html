@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>EP Creative OS V1</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315776e'/%3E%3Cpath d='M19 44V17h26v6H27v5h15v6H27v4h19v6H19z' fill='%23fffaf0'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=4" />
   </head>
   <body>
     <div class="app-shell">
@@ -40,6 +40,7 @@
           <div class="topbar-actions">
             <button id="open-archive" class="ghost-button">歌曲档案</button>
             <button id="export-bundle" class="strong-button">导出素材包</button>
+            <button id="export-cubase" class="ghost-button" title="导出 MIDI 骨架、编排表和 Cubase 导入说明">导出 Cubase 包</button>
             <button id="shutdown-service" class="mini-button danger-button">关闭服务</button>
           </div>
         </header>
@@ -87,7 +88,7 @@
             <button id="make-suno" class="ghost-button">生成可复制到 Suno 的提示词</button>
           </div>
 
-          <div id="assistant-message" class="assistant-message">还没有会话，先运行当前阶段。</div>
+          <div id="assistant-message" class="assistant-message" role="status" aria-live="polite">还没有会话，先运行当前阶段。</div>
         </section>
 
         <section class="pending-panel">
@@ -108,6 +109,12 @@
           </div>
           <div class="review-grid">
             <label class="field-label">这次生成的名称 <input id="review-take" value="Suno take 01" /></label>
+            <label class="field-label review-prompt-field">本次实际使用的 Prompt 版本
+              <select id="review-prompt-variant" aria-describedby="review-prompt-help">
+                <option value="">尚未选择 Prompt 版本</option>
+              </select>
+              <small id="review-prompt-help">复制“可直接投喂 Suno”时会自动选中，也可以在这里手动指定。</small>
+            </label>
             <label class="field-label">Hook 准确度 <small>1=没唱清，5=很清楚</small><input id="score-hook" type="number" min="1" max="5" value="3" /></label>
             <label class="field-label">风格准确度 <small>1=跑偏，5=贴近</small><input id="score-style" type="number" min="1" max="5" value="3" /></label>
             <label class="field-label">段落结构 <small>1=混乱，5=清楚</small><input id="score-section" type="number" min="1" max="5" value="3" /></label>
@@ -128,7 +135,8 @@
           <p class="eyebrow">当前采用</p>
           <div class="current-line"><span>锁定 Hook</span><strong id="locked-hook">未锁定</strong></div>
           <div class="current-line"><span>结构路线</span><strong id="structure-route">未选择</strong></div>
-          <div class="current-line"><span>Prompt 包</span><strong id="prompt-pack">未选择</strong></div>
+          <div class="current-line"><span>系统推荐</span><strong id="prompt-pack">未选择</strong></div>
+          <div class="current-line"><span>本次实际使用</span><strong id="prompt-used-variant">尚未选择</strong></div>
         </section>
 
         <section class="board-card">
@@ -152,12 +160,12 @@
       </aside>
     </div>
 
-    <div id="archive-drawer" class="drawer" aria-hidden="true">
+    <div id="archive-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="archive-title" aria-hidden="true">
       <div class="drawer-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">档案编辑</p>
-            <h3>歌曲档案</h3>
+            <h3 id="archive-title">歌曲档案</h3>
           </div>
           <button id="close-archive" class="mini-button">关闭</button>
         </div>
@@ -174,12 +182,12 @@
       </div>
     </div>
 
-    <div id="project-modal" class="modal" aria-hidden="true">
+    <div id="project-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="project-modal-title" aria-hidden="true">
       <div class="modal-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">新建 EP</p>
-            <h3>先给项目一个清楚的起点</h3>
+            <h3 id="project-modal-title">先给项目一个清楚的起点</h3>
           </div>
           <button id="close-project-modal" class="mini-button">关闭</button>
         </div>
@@ -190,12 +198,12 @@
       </div>
     </div>
 
-    <div id="song-modal" class="modal" aria-hidden="true">
+    <div id="song-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="song-modal-title" aria-hidden="true">
       <div class="modal-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">新建歌曲</p>
-            <h3>给制作人一点必要信息</h3>
+            <h3 id="song-modal-title">给制作人一点必要信息</h3>
           </div>
           <button id="close-song-modal" class="mini-button">关闭</button>
         </div>
@@ -207,7 +215,7 @@
       </div>
     </div>
 
-    <div id="toast" class="toast" hidden></div>
-    <script src="/static/app.js"></script>
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+    <script src="/static/app.js?v=4"></script>
   </body>
 </html>

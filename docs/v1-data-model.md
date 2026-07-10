@@ -239,6 +239,43 @@ For existing V0 databases, if columns are missing, V1 can either:
 
 For this repo V1 implementation, tests use a temporary SQLite DB.
 
+## Suno Prompt Harness V2 Artifact Content
+
+No database migration is required for Harness V2 because `creative_artifacts.content` is JSON and can be extended in place.
+
+For `artifact_type = "suno_prompt_pack"`, content includes:
+
+- `packs`
+- `recommended_variant`
+- `recommended_pack`
+- `feedback_summary`
+
+Each pack includes:
+
+- `variant`
+- `variant_role`
+- `recommended`
+- `recommendation_reason`
+- `music_spec`
+- `route_spec`
+- `style_prompt`
+- `lyrics_prompt`
+- `exclude_prompt`
+- `advanced_settings`
+- `validation`
+- `negative_terms`
+- `hook_delivery_notes`
+- `section_control_notes`
+- `revision_strategy`
+- `suno_risks`
+- `source_trace`
+- `style_specificity_score`
+- `quality_checks`
+
+For `artifact_type = "generation_review"`, content may include `prompt_pack_trace` when the user logs a review against a prompt pack. That trace stores the prompt pack artifact id, variant, validation score, and source trace so the feedback loop can be inspected later.
+
+The `songs.current_prompt_pack_id`, `songs.style_prompt`, and `songs.lyrics_prompt` fields remain legacy-compatible snapshots of the accepted recommended pack.
+
 ## Database Size Controls
 
 - Do not store binary file content in DB.

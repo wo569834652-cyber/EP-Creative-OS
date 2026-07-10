@@ -6,9 +6,11 @@ import zipfile
 from pathlib import Path
 
 from mido import Message, MetaMessage, MidiFile, MidiTrack, bpm2tempo
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.models import Song
-from app.services.suno import generate_suno_prompt
+from app.models import CreativeArtifact, Song
+from app.services.suno_engine import build_suno_prompt_packs
 from app.services.versioning import song_snapshot
 
 
@@ -143,15 +145,49 @@ Suggested workflow:
 """
 
 
-def create_cubase_pack(song: Song) -> Path:
-    suno = generate_suno_prompt(song)
+def _saved_prompt_pack(db: Session, song: Song) -> dict | None:
+    if song.current_prompt_pack_id:
+        artifact = db.get(CreativeArtifact, song.current_prompt_pack_id)
+        if artifact and artifact.song_id == song.id and artifact.artifact_type == "suno_prompt_pack":
+            return artifact.content or None
+    artifact = db.scalar(
+        select(CreativeArtifact)
+        .where(CreativeArtifact.song_id == song.id)
+        .where(CreativeArtifact.artifact_type == "suno_prompt_pack")
+        .where(CreativeArtifact.status == "accepted")
+        .order_by(CreativeArtifact.updated_at.desc())
+        .limit(1)
+    )
+    return (artifact.content or None) if artifact else None
+
+
+def create_cubase_pack(db: Session, song: Song) -> Path:
+    prompt_data = _saved_prompt_pack(db, song) or build_suno_prompt_packs(song, db=db)
+    suno = prompt_data["recommended_pack"]
+    settings = suno.get("advanced_settings") or {}
+    validation = suno.get("validation") or {}
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{song.id}_cubase_pack.zip")
     temp.close()
     path = Path(temp.name)
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("song.json", json.dumps(song_snapshot(song), ensure_ascii=False, indent=2))
-        zf.writestr("suno_prompt.txt", f"STYLE PROMPT\n{suno.style_prompt}\n\nLYRICS PROMPT\n{suno.lyrics_prompt}")
+        zf.writestr(
+            "suno_prompt.txt",
+            (
+                f"RECOMMENDED VARIANT\n{suno.get('variant')} / {suno.get('variant_role')}\n\n"
+                f"STYLE PROMPT\n{suno.get('style_prompt')}\n\n"
+                f"LYRICS PROMPT\n{suno.get('lyrics_prompt')}\n\n"
+                f"EXCLUDE PROMPT\n{suno.get('exclude_prompt')}\n\n"
+                "ADVANCED SETTINGS\n"
+                f"Weirdness: {settings.get('weirdness')}\n"
+                f"Style Influence: {settings.get('style_influence')}\n"
+                f"Audio Influence: {settings.get('audio_influence')}\n\n"
+                f"VALIDATION SUMMARY\nScore: {validation.get('score')}\n"
+                f"Warnings: {', '.join(validation.get('warnings', []) or []) or 'none'}\n"
+                f"Blocking Issues: {', '.join(validation.get('blocking_issues', []) or []) or 'none'}\n"
+            ),
+        )
         zf.writestr("lyrics.txt", song.lyrics or "")
         zf.writestr("arrangement.csv", build_arrangement_csv())
         zf.writestr("cubase_import_notes.txt", cubase_notes(song))

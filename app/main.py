@@ -340,7 +340,7 @@ def confirm_stage(song_id: int, payload: StageConfirmRequest, db: Session = Depe
 @app.post("/api/songs/{song_id}/suno-prompt-packs", response_model=SunoPromptPackResponse)
 def create_suno_prompt_packs(song_id: int, db: Session = Depends(get_db)) -> SunoPromptPackResponse:
     song = get_song_or_404(db, song_id)
-    content = build_suno_prompt_packs(song)
+    content = build_suno_prompt_packs(song, db=db)
     artifact = CreativeArtifact(
         song_id=song.id,
         artifact_type="suno_prompt_pack",
@@ -375,15 +375,38 @@ async def create_generation_review(song_id: int, payload: GenerationReviewCreate
     feedback_context = {
         "take_name": payload.take_name,
         "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+        "prompt_pack_variant": payload.prompt_pack_variant,
         "text_feedback": payload.text_feedback,
         "scores": scores,
     }
+    prompt_pack_trace = {}
+    if payload.prompt_pack_artifact_id:
+        prompt_pack = db.get(CreativeArtifact, payload.prompt_pack_artifact_id)
+        if not prompt_pack:
+            raise HTTPException(status_code=404, detail="Prompt pack artifact not found")
+        if prompt_pack.song_id != song.id or prompt_pack.artifact_type != "suno_prompt_pack":
+            raise HTTPException(status_code=422, detail="Prompt pack artifact does not belong to this song")
+        prompt_content = prompt_pack.content or {}
+        packs = prompt_content.get("packs") or []
+        selected_variant = payload.prompt_pack_variant or prompt_content.get("recommended_variant")
+        selected_pack = next((pack for pack in packs if pack.get("variant") == selected_variant), None)
+        if payload.prompt_pack_variant and not selected_pack:
+            raise HTTPException(status_code=422, detail="Prompt pack variant was not found in this artifact")
+        selected_pack = selected_pack or prompt_content.get("recommended_pack") or {}
+        prompt_pack_trace = {
+            "prompt_pack_artifact_id": prompt_pack.id,
+            "variant": selected_pack.get("variant") or selected_variant,
+            "validation_score": (selected_pack.get("validation") or {}).get("score"),
+            "source_trace": selected_pack.get("source_trace", {}),
+        }
     ai_payload = await build_generation_review_with_ai(song, ep, feedback_context)
     if ai_payload:
         content = {
             **ai_payload["content"],
             "take_name": payload.take_name,
             "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+            "prompt_pack_variant": payload.prompt_pack_variant,
+            "prompt_pack_trace": prompt_pack_trace,
             "text_feedback": payload.text_feedback,
             "scores": scores,
         }
@@ -415,6 +438,8 @@ async def create_generation_review(song_id: int, payload: GenerationReviewCreate
     content = {
         "take_name": payload.take_name,
         "prompt_pack_artifact_id": payload.prompt_pack_artifact_id,
+        "prompt_pack_variant": payload.prompt_pack_variant,
+        "prompt_pack_trace": prompt_pack_trace,
         "text_feedback": payload.text_feedback,
         "scores": scores,
         "next_revision_target": lowest,
@@ -503,7 +528,7 @@ def hooks(song_id: int, payload: HookRequest, db: Session = Depends(get_db)) -> 
 @app.post("/api/songs/{song_id}/suno", response_model=SunoResponse)
 def suno(song_id: int, db: Session = Depends(get_db)) -> SunoResponse:
     song = get_song_or_404(db, song_id)
-    response = generate_suno_prompt(song)
+    response = generate_suno_prompt(song, db=db)
     song.style_prompt = response.style_prompt
     song.lyrics_prompt = response.lyrics_prompt
     create_version(db, song, "suno_prompt", "Generated V1 Suno prompt")
@@ -554,7 +579,7 @@ def diff_versions(song_id: int, from_version: int, to_version: int, db: Session 
 @app.post("/api/songs/{song_id}/exports/cubase-pack")
 def export_cubase_pack(song_id: int, db: Session = Depends(get_db)) -> FileResponse:
     song = get_song_or_404(db, song_id)
-    path = create_cubase_pack(song)
+    path = create_cubase_pack(db, song)
     filename = f"{song.title or 'song'}_cubase_pack.zip".replace("/", "_").replace("\\", "_")
     return FileResponse(path, filename=filename, media_type="application/zip")
 

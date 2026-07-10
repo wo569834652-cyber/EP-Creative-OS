@@ -22,6 +22,29 @@ The current V1 focus is not a generic CRUD demo. It is a stage-based writing and
 - Asset bundle export with markdown notes, lyrics, prompts, reviews, manifest, and uploads
 - DeepSeek OpenAI-compatible client using `deepseek-v4-pro` by default
 
+## Suno Prompt Harness V2
+
+Suno Prompt Lab is now a closed harness loop, not a fixed prompt template:
+
+`Brief -> Normalize -> Compose -> Validate -> Variant -> Package -> Learn -> Iterate`
+
+The deterministic backend normalizes each song into a `MusicSpec`, selects a registered `RouteSpec`, composes separated `Style Prompt`, `Lyrics Prompt`, and `Exclude Prompt` fields, validates each pack, creates up to three real variants, packages advanced Suno settings, and learns from recent generation reviews.
+
+Each prompt pack includes:
+
+- `music_spec`: genre, BPM, vocal delivery, instrumentation, rhythm, bass, mix space, energy curve, and language metadata.
+- `route_spec`: section map, hook placement, arrangement motion, stability notes, and Suno risks.
+- `style_prompt`: musical production instructions only. Language labels such as Mandarin, Chinese, 普通话, or 中文 are filtered out.
+- `lyrics_prompt`: lyric source, section delivery, hook control, revision target, and language plan when needed.
+- `exclude_prompt`: concrete negative musical controls.
+- `advanced_settings`: weirdness, style influence, and audio influence.
+- `validation`: score, passed checks, warnings, and blocking issues.
+- `source_trace`: hook source, structure route, lyric source, and generation-review feedback used.
+
+Generation reviews feed the next prompt pack. For example, feedback like "drums too heavy, vocal too sweet, hook unclear" becomes deterministic revision pressure: softened drums, less sweet restrained vocal delivery, and stronger hook repetition or chorus clarity.
+
+The review form binds each Suno take to the actual Prompt artifact and variant used. Copying the Suno-ready three-field package selects that variant automatically, while manual selection remains available for A/B tests. Formal asset exports include accepted/current creative artifacts rather than pending drafts; a separate Cubase import pack is available from the main toolbar.
+
 ## AI Involvement
 
 The main production flow now tries to use DeepSeek first in the creative stages where AI can materially move the song forward:

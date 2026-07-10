@@ -793,19 +793,19 @@ access denied
     return message, artifacts, ["接受歌词草稿", "进入 Suno Prompt 实验室"]
 
 
-def _suno_prompt_lab(song: Song) -> tuple[str, list[dict], list[str]]:
-    content = build_suno_prompt_packs(song)
-    message = "已生成 3 套 Suno Prompt Pack：primary / alternate / experimental。推荐 primary，因为 Hook 位置最清楚，结构最稳。"
+def _suno_prompt_lab(song: Song, db: Session | None = None) -> tuple[str, list[dict], list[str]]:
+    content = build_suno_prompt_packs(song, db=db)
+    message = f"已生成 {len(content['packs'])} 套 Suno Prompt Pack，推荐 {content['recommended_variant']}。推荐逻辑基于 validation score、route stability、variant role 和 feedback fit。"
     artifacts = [
         {
             "artifact_type": "suno_prompt_pack",
             "title": f"{song.title} / Suno Prompt 包",
-            "summary": "最多三套方案，推荐 primary。",
+            "summary": f"最多三套方案，推荐 {content['recommended_variant']}。",
             "content": content,
             "is_recommended": True,
         }
     ]
-    return message, artifacts, ["复制 primary 到 Suno", "生成后回到生成复盘记录结果"]
+    return message, artifacts, [f"复制 {content['recommended_variant']} 到 Suno", "生成后回到生成复盘记录结果"]
 
 
 def _asset_organizer(song: Song) -> tuple[str, list[dict], list[str]]:
@@ -832,6 +832,7 @@ def build_stage_output(
     stage: str,
     previous_hook_texts: list[str] | None = None,
     variation_seed: str = "",
+    db: Session | None = None,
 ) -> tuple[str, list[dict], list[str]]:
     if stage == "diagnosis":
         return _diagnosis(song, ep)
@@ -842,7 +843,7 @@ def build_stage_output(
     if stage == "lyrics_draft":
         return _lyrics_draft(song)
     if stage == "suno_prompt_lab":
-        return _suno_prompt_lab(song)
+        return _suno_prompt_lab(song, db=db)
     if stage == "asset_organizer":
         return _asset_organizer(song)
     return (
@@ -866,12 +867,13 @@ async def build_stage_output_with_ai(
     user_goal: str,
     user_message: str,
     previous_hook_texts: list[str] | None = None,
+    db: Session | None = None,
 ) -> tuple[str, list[dict], list[str]]:
     ai_output = await _try_ai_stage(song, ep, stage, user_goal, user_message, previous_hook_texts)
     if ai_output:
         return ai_output
 
-    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage, previous_hook_texts, user_message)
+    message, artifact_payloads, next_actions = build_stage_output(song, ep, stage, previous_hook_texts, user_message, db=db)
     _mark_fallback(artifact_payloads)
     if stage in {"diagnosis", "hook_lab", "structure_lab", "lyrics_draft", "generation_review"}:
         message = f"AI 本阶段生成不可用，已临时使用本地规则草稿。\n\n{message}"
@@ -927,6 +929,7 @@ async def create_session_with_artifacts(
         user_goal,
         user_message,
         previous_hook_texts,
+        db,
     )
     session = CreativeSession(
         song_id=song.id,

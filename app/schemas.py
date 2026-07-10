@@ -172,6 +172,7 @@ class SunoPromptPackResponse(BaseModel):
 class GenerationReviewCreate(BaseModel):
     take_name: str
     prompt_pack_artifact_id: int | None = None
+    prompt_pack_variant: str | None = None
     text_feedback: str = ""
     hook_accuracy: int = Field(default=3, ge=1, le=5)
     style_accuracy: int = Field(default=3, ge=1, le=5)

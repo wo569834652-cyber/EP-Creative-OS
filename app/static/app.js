@@ -13,6 +13,10 @@ let stageRunning = false;
 let sunoRunning = false;
 let reviewSaving = false;
 let bundleExporting = false;
+let cubaseExporting = false;
+let activeOverlay = null;
+let overlayReturnFocus = null;
+let lastUsedPromptSelection = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -130,6 +134,111 @@ function promptPackQuality(pack) {
   return `<p class="${failed.length ? "prompt-source-warn" : "prompt-source-ok"}">Style 具体度 ${pack.style_specificity_score}/100${failed.length ? `，待补：${failed.slice(0, 2).join("、")}` : "，检查通过"}</p>`;
 }
 
+function packValidationSummary(pack) {
+  const validation = pack.validation || {};
+  const warnings = validation.warnings || [];
+  const blocking = validation.blocking_issues || [];
+  const warningPreview = warnings.slice(0, 2).join(" / ");
+  return `
+    <div class="prompt-metric-row">
+      <span>Validation ${Number(validation.score || 0)}/100</span>
+      <span>Warnings ${warnings.length}</span>
+      <span>Specificity ${Number(pack.style_specificity_score || 0)}/100</span>
+      <span>${(pack.source_trace?.feedback_used || []).length ? "已吸收最近生成复盘" : "暂无复盘输入"}</span>
+    </div>
+    ${warningPreview ? `<div class="validation-warning-preview">Warning: ${escapeHtml(warningPreview)}</div>` : ""}
+    ${blocking.length ? `<div class="validation-blocking">Blocking: ${escapeHtml(blocking.join(" / "))}</div>` : ""}
+  `;
+}
+
+function musicSpecSummary(pack) {
+  const spec = pack.music_spec || {};
+  const genre = [spec.primary_genre, spec.secondary_genre].filter(Boolean).join(" / ");
+  return `
+    <div class="music-spec-grid">
+      <div><span>Genre</span><strong>${escapeHtml(genre || "-")}</strong></div>
+      <div><span>BPM</span><strong>${escapeHtml(spec.bpm || "-")}</strong></div>
+      <div><span>Vocal</span><strong>${escapeHtml(spec.vocal_delivery || spec.vocal_type || "-")}</strong></div>
+      <div><span>Instrumentation</span><strong>${escapeHtml((spec.instrumentation || []).slice(0, 5).join(", ") || "-")}</strong></div>
+      <div><span>Energy</span><strong>${escapeHtml(spec.energy_curve || "-")}</strong></div>
+      <div><span>Mix/Space</span><strong>${escapeHtml(spec.mix_space || "-")}</strong></div>
+    </div>
+  `;
+}
+
+function advancedSettingsSummary(pack) {
+  const settings = pack.advanced_settings || {};
+  return `
+    <div class="advanced-settings">
+      <span>Weirdness <strong>${settings.weirdness ?? "-"}</strong></span>
+      <span>Style Influence <strong>${settings.style_influence ?? "-"}</strong></span>
+      <span>Audio Influence <strong>${settings.audio_influence ?? "-"}</strong></span>
+    </div>
+  `;
+}
+
+function compactSpecLine(pack) {
+  const spec = pack.music_spec || {};
+  const genre = [spec.primary_genre, spec.secondary_genre].filter(Boolean).join(" / ");
+  return `<p class="compact-spec-line">${escapeHtml(genre || "-")} · ${escapeHtml(spec.bpm || "-")} BPM · ${escapeHtml(spec.vocal_delivery || spec.vocal_type || "-")}</p>`;
+}
+
+function producerDecisionSummary(pack) {
+  const spec = pack.music_spec || {};
+  const route = pack.route_spec || {};
+  const trace = pack.source_trace || {};
+  const feedbackUsed = trace.feedback_used || [];
+  return `
+    <div class="producer-decision-box">
+      <strong>制作决策</strong>
+      <p>EP function: ${escapeHtml(spec.use_case || "-")}</p>
+      <p>Hook: ${escapeHtml(trace.hook || "-")}</p>
+      <p>Route: ${escapeHtml(route.route || "-")} · ${escapeHtml(route.hook_placement || "-")}</p>
+      <p>Stability: ${escapeHtml(route.stability_notes || "-")}</p>
+      <p>Feedback learned: ${feedbackUsed.length ? "yes" : "not yet"}</p>
+      <p>Next experiment: ${escapeHtml(pack.revision_strategy || "-")}</p>
+    </div>
+  `;
+}
+
+function feedbackSummary(pack) {
+  const summary = pack.feedback_summary || {};
+  if (!summary.review_count) return "";
+  return `
+    <div class="feedback-loop-box">
+      <strong>已吸收最近生成复盘</strong>
+      <p>Recurring: ${escapeHtml((summary.recurring_problems || []).join(", ") || "-")}</p>
+      <p>Blocked: ${escapeHtml((summary.blocked_terms || []).slice(0, 6).join(", ") || "-")}</p>
+      <p>Next bias: ${escapeHtml(summary.next_revision_bias || "-")}</p>
+    </div>
+  `;
+}
+
+function listChecks(title, items, className = "") {
+  if (!items || !items.length) return `<div class="check-list ${className}"><strong>${title}</strong><p>none</p></div>`;
+  return `<div class="check-list ${className}"><strong>${title}</strong><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`;
+}
+
+function fullPackText(pack) {
+  return [
+    `VARIANT\n${pack.variant} / ${pack.variant_role}`,
+    `STYLE PROMPT\n${pack.style_prompt || ""}`,
+    `LYRICS PROMPT\n${pack.lyrics_prompt || ""}`,
+    `EXCLUDE PROMPT\n${pack.exclude_prompt || ""}`,
+    `ADVANCED SETTINGS\n${JSON.stringify(pack.advanced_settings || {}, null, 2)}`,
+    `VALIDATION\n${JSON.stringify(pack.validation || {}, null, 2)}`,
+    `SOURCE TRACE\n${JSON.stringify(pack.source_trace || {}, null, 2)}`,
+  ].join("\n\n");
+}
+
+function sunoReadyText(pack) {
+  return [
+    `STYLE PROMPT\n${pack.style_prompt || ""}`,
+    `LYRICS PROMPT\n${pack.lyrics_prompt || ""}`,
+    `EXCLUDE PROMPT\n${pack.exclude_prompt || ""}`,
+  ].join("\n\n");
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -140,7 +249,10 @@ function escapeHtml(value) {
 }
 
 function copyText(text) {
-  if (!text) return;
+  if (!text) {
+    toast("没有可复制内容");
+    return;
+  }
   navigator.clipboard?.writeText(text).then(
     () => toast("已复制"),
     () => {
@@ -155,14 +267,40 @@ function copyText(text) {
   );
 }
 
-function modal(id, open) {
+function modal(id, open, trigger = document.activeElement) {
   const el = $(id);
   el.classList.toggle("open", open);
   el.setAttribute("aria-hidden", open ? "false" : "true");
   if (open) {
-    const firstInput = el.querySelector("input, textarea, button");
+    activeOverlay = el;
+    overlayReturnFocus = trigger;
+    const firstInput = el.querySelector("input, textarea, select, button");
     firstInput?.focus();
+  } else if (activeOverlay === el) {
+    activeOverlay = null;
+    const returnFocus = overlayReturnFocus;
+    overlayReturnFocus = null;
+    returnFocus?.focus();
   }
+}
+
+function promptSelectionValue(artifactId, variant) {
+  return artifactId && variant ? `${artifactId}:${variant}` : "";
+}
+
+function parsePromptSelection(value) {
+  const [artifactId, ...variantParts] = String(value || "").split(":");
+  const variant = variantParts.join(":");
+  return artifactId && variant ? { artifactId: Number(artifactId), variant } : null;
+}
+
+function markPromptUsed(artifact, pack) {
+  lastUsedPromptSelection = { songId: currentSong?.id, artifactId: artifact.id, variant: pack.variant };
+  const select = $("review-prompt-variant");
+  const value = promptSelectionValue(artifact.id, pack.variant);
+  if (select && [...select.options].some((option) => option.value === value)) select.value = value;
+  updatePromptUsedLabel();
+  toast(`已复制并标记本次使用：${pack.variant}`);
 }
 
 function hookSetView(artifact) {
@@ -242,8 +380,100 @@ function promptPackView(artifact) {
     });
     const copyStyle = button("复制本项 Style", () => copyText(pack.style_prompt));
     const copyLyrics = button("复制本项 Lyrics", () => copyText(pack.lyrics_prompt));
-    const copyBoth = button(pack.recommended ? "复制推荐整套" : "复制整套", () => copyText(`STYLE PROMPT\n${pack.style_prompt}\n\nLYRICS PROMPT\n${pack.lyrics_prompt}`));
+    const copyBoth = button(pack.recommended ? "复制推荐整套" : "复制整套", () => {
+      markPromptUsed(artifact, pack);
+      copyText(`STYLE PROMPT\n${pack.style_prompt}\n\nLYRICS PROMPT\n${pack.lyrics_prompt}`);
+    });
     actions.append(toggle, copyStyle, copyLyrics, copyBoth);
+    wrap.append(item);
+  });
+  return wrap;
+}
+
+function promptPackViewV2(artifact) {
+  const content = artifact.content || {};
+  const packs = [...(content.packs || [])].sort((left, right) => {
+    const leftRecommended = left.recommended || left.variant === content.recommended_variant;
+    const rightRecommended = right.recommended || right.variant === content.recommended_variant;
+    return Number(rightRecommended) - Number(leftRecommended);
+  });
+  if (!packs.length) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "prompt-pack-list";
+  packs.forEach((pack) => {
+    const isRecommended = pack.recommended || pack.variant === content.recommended_variant;
+    const item = document.createElement("section");
+    item.className = `prompt-pack-item ${isRecommended ? "recommended" : "collapsed"} ${pack.validation?.blocking_issues?.length ? "has-blocking" : ""}`;
+    const validation = pack.validation || {};
+    item.innerHTML = `
+      <div class="prompt-pack-head">
+        <div>
+          <strong>${escapeHtml(pack.variant || "")}${pack.variant_role ? ` / ${escapeHtml(pack.variant_role)}` : ""}${isRecommended ? " / 推荐" : ""}</strong>
+          <p>${escapeHtml(pack.recommendation_reason || "")}</p>
+          ${compactSpecLine(pack)}
+          ${packValidationSummary(pack)}
+          <p class="${pack.lyrics_source === "accepted_song_lyrics" ? "prompt-source-ok" : "prompt-source-warn"}">
+            ${pack.lyrics_source === "accepted_song_lyrics" ? "歌词提示已使用当前确认歌词" : "歌词提示仍是临时结构模板，请确认歌词后重新生成"}
+          </p>
+        </div>
+        <div class="prompt-pack-actions"></div>
+      </div>
+      ${producerDecisionSummary(pack)}
+      ${feedbackSummary(pack)}
+      <details class="prompt-detail" open>
+        <summary>音乐规格</summary>
+        ${musicSpecSummary(pack)}
+      </details>
+      <details class="prompt-detail" open>
+        <summary>高级参数</summary>
+        ${advancedSettingsSummary(pack)}
+      </details>
+      <div class="prompt-block">
+        <div class="prompt-block-head"><span>Style Prompt</span></div>
+        <pre>${escapeHtml(pack.style_prompt || "")}</pre>
+      </div>
+      <div class="prompt-block">
+        <div class="prompt-block-head"><span>Lyrics Prompt</span></div>
+        <pre>${escapeHtml(pack.lyrics_prompt || "")}</pre>
+      </div>
+      <div class="prompt-block">
+        <div class="prompt-block-head"><span>Exclude Prompt</span></div>
+        <pre>${escapeHtml(pack.exclude_prompt || "")}</pre>
+      </div>
+      <details class="prompt-detail" ${isRecommended ? "open" : ""}>
+        <summary>质量检查</summary>
+        <div class="validation-grid">
+          ${listChecks("Passed", validation.passed_checks || [], "pass")}
+          ${listChecks("Warnings", validation.warnings || [], "warn")}
+          ${listChecks("Blocking", validation.blocking_issues || [], "block")}
+        </div>
+      </details>
+      <div class="prompt-notes">
+        <strong>下一轮修正策略</strong>
+        <p>${escapeHtml(pack.revision_strategy || "")}</p>
+        <strong>来源记录</strong>
+        <pre>${escapeHtml(JSON.stringify(pack.source_trace || {}, null, 2))}</pre>
+      </div>
+    `;
+    const actions = item.querySelector(".prompt-pack-actions");
+    const toggle = button(isRecommended ? "收起" : "展开", () => {
+      item.classList.toggle("collapsed");
+      toggle.textContent = item.classList.contains("collapsed") ? "展开" : "收起";
+    });
+    const copyStyle = button("复制 Style", () => copyText(pack.style_prompt));
+    const copyLyrics = button("复制 Lyrics", () => copyText(pack.lyrics_prompt));
+    const copyExclude = button("复制 Exclude", () => copyText(pack.exclude_prompt));
+    const copySunoReady = button(isRecommended ? "复制可直接投喂 Suno（推荐）" : "复制可直接投喂 Suno", () => {
+      markPromptUsed(artifact, pack);
+      copyText(sunoReadyText(pack));
+    }, isRecommended && !validation.blocking_issues?.length ? "strong-button prompt-primary-action" : "mini-button");
+    if (validation.blocking_issues?.length) {
+      copySunoReady.textContent = "复制风险版本";
+      copySunoReady.title = `存在阻断问题：${validation.blocking_issues.join("；")}`;
+    }
+    const copyRecord = button("复制完整记录", () => copyText(fullPackText(pack)));
+    actions.append(toggle, copyStyle, copyLyrics, copyExclude, copySunoReady, copyRecord);
     wrap.append(item);
   });
   return wrap;
@@ -360,6 +590,45 @@ function updateCurrentPromptLabel() {
   $("prompt-pack").textContent = `Suno Prompt：${recommended}（推荐）`;
 }
 
+function updatePromptUsedLabel() {
+  const selected = lastUsedPromptSelection?.songId === currentSong?.id ? lastUsedPromptSelection : null;
+  $("prompt-used-variant").textContent = selected ? `${selected.variant} · Artifact #${selected.artifactId}` : "尚未标记";
+}
+
+function markSelectedReviewPromptUsed() {
+  const selected = parsePromptSelection($("review-prompt-variant").value);
+  lastUsedPromptSelection = selected ? { songId: currentSong?.id, ...selected } : null;
+  updatePromptUsedLabel();
+}
+
+function renderPromptReviewOptions() {
+  const select = $("review-prompt-variant");
+  const previous = select.value;
+  select.innerHTML = '<option value="">尚未选择 Prompt 版本</option>';
+  artifacts
+    .filter((artifact) => artifact.artifact_type === "suno_prompt_pack" && artifact.status !== "discarded")
+    .forEach((artifact) => {
+      const recommended = artifact.content?.recommended_variant || artifact.content?.recommended_pack?.variant;
+      (artifact.content?.packs || []).forEach((pack) => {
+        if (!pack.variant) return;
+        const option = document.createElement("option");
+        option.value = promptSelectionValue(artifact.id, pack.variant);
+        option.textContent = `Artifact #${artifact.id} · ${pack.variant}${pack.variant === recommended ? " · 系统推荐" : ""}${artifact.status === "pending" ? " · 待确认" : ""}`;
+        select.append(option);
+      });
+    });
+
+  const copied = lastUsedPromptSelection?.songId === currentSong?.id
+    ? promptSelectionValue(lastUsedPromptSelection.artifactId, lastUsedPromptSelection.variant)
+    : "";
+  const currentArtifact = artifacts.find((artifact) => artifact.id === currentSong?.current_prompt_pack_id);
+  const currentRecommended = currentArtifact?.content?.recommended_variant || currentArtifact?.content?.recommended_pack?.variant;
+  const currentValue = promptSelectionValue(currentArtifact?.id, currentRecommended);
+  const preferred = [previous, copied, currentValue].find((value) => value && [...select.options].some((option) => option.value === value));
+  select.value = preferred || "";
+  updatePromptUsedLabel();
+}
+
 function artifactCard(artifact, pending = false) {
   const card = document.createElement("article");
   card.className = `artifact-card ${artifact.status === "pending" ? "pending" : ""} ${artifact.locked ? "locked" : ""}`;
@@ -392,7 +661,15 @@ function artifactCard(artifact, pending = false) {
   if (artifact.artifact_type === "suno_prompt_pack") {
     const preview = card.querySelector(".artifact-preview");
     if (preview) preview.remove();
-    const view = promptPackView(artifact);
+    const packs = artifact.content?.packs || [];
+    const isHarnessV2 = packs.some((pack) => pack.music_spec || pack.validation || pack.advanced_settings || pack.exclude_prompt);
+    const view = isHarnessV2 ? promptPackViewV2(artifact) : promptPackView(artifact);
+    if (!isHarnessV2) {
+      const legacyNotice = document.createElement("p");
+      legacyNotice.className = "legacy-prompt-notice";
+      legacyNotice.textContent = "这是旧版 Prompt 包。重新生成后可获得质量检查、Exclude Prompt 和高级参数。";
+      card.append(legacyNotice);
+    }
     if (view) card.append(view);
   } else if (artifact.artifact_type === "hook_set") {
     const preview = card.querySelector(".artifact-preview");
@@ -559,6 +836,7 @@ async function refreshBoard() {
     versions = [];
     assets = [];
     renderArtifacts();
+    renderPromptReviewOptions();
     renderVersions();
     renderAssets();
     renderStageGuide();
@@ -569,6 +847,7 @@ async function refreshBoard() {
   assets = await api(`/api/songs/${currentSong.id}/assets`);
   updateCurrentPromptLabel();
   renderArtifacts();
+  renderPromptReviewOptions();
   renderVersions();
   renderAssets();
   renderStageGuide();
@@ -840,8 +1119,16 @@ async function restoreVersion(versionId) {
 
 async function saveReview() {
   if (!currentSong || reviewSaving) return;
+  const promptSelection = parsePromptSelection($("review-prompt-variant").value);
+  if ($("review-prompt-variant").options.length > 1 && !promptSelection) {
+    toast("请先选择这次实际使用的 Prompt 版本");
+    $("review-prompt-variant").focus();
+    return;
+  }
   const payload = {
     take_name: $("review-take").value,
+    prompt_pack_artifact_id: promptSelection?.artifactId || null,
+    prompt_pack_variant: promptSelection?.variant || null,
     text_feedback: $("review-feedback").value,
     hook_accuracy: Number($("score-hook").value),
     style_accuracy: Number($("score-style").value),
@@ -895,19 +1182,43 @@ async function exportBundle() {
       toast(text || "素材包导出失败，请检查是否已有可导出的内容");
       return;
     }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${currentSong.title || "song"}_asset_bundle.zip`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    $("assistant-message").textContent = "制作资料包已生成下载，包含歌曲档案、歌词、Prompt、复盘、上传素材清单。";
-    toast("制作资料包已开始下载");
+    await downloadResponse(response, `${currentSong.title || "song"}_asset_bundle.zip`);
+    $("assistant-message").textContent = "制作资料包已生成，仅包含当前采用或已接受的创作产物，以及上传素材。";
+    toast("正式制作资料包已开始下载");
   } finally {
     bundleExporting = false;
+    buttonEl.disabled = false;
+    buttonEl.textContent = originalLabel;
+  }
+}
+
+async function downloadResponse(response, filename) {
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function exportCubase() {
+  if (!currentSong || cubaseExporting) return;
+  cubaseExporting = true;
+  const buttonEl = $("export-cubase");
+  const originalLabel = buttonEl.textContent;
+  buttonEl.disabled = true;
+  buttonEl.textContent = "正在导出...";
+  try {
+    const response = await fetch(`/api/songs/${currentSong.id}/exports/cubase-pack`, { method: "POST" });
+    if (!response.ok) throw new Error((await response.text()) || "Cubase 包导出失败");
+    await downloadResponse(response, `${currentSong.title || "song"}_cubase_pack.zip`);
+    $("assistant-message").textContent = "Cubase 导入包已生成，包含 MIDI 骨架、编排表、Prompt 和导入说明；它不是 .cpr 工程文件。";
+    toast("Cubase 导入包已开始下载");
+  } finally {
+    cubaseExporting = false;
     buttonEl.disabled = false;
     buttonEl.textContent = originalLabel;
   }
@@ -954,7 +1265,7 @@ async function saveSong() {
   songs = await api(`/api/songs?ep_id=${currentEpId}`);
   renderSongs();
   fillSongHeader();
-  $("archive-drawer").classList.remove("open");
+  modal("archive-drawer", false);
   toast("歌曲档案已保存");
 }
 
@@ -964,18 +1275,12 @@ $("make-suno").onclick = () => makeSuno().catch((err) => toast(err.message));
 $("save-review").onclick = () => saveReview().catch((err) => toast(err.message));
 $("asset-file").onchange = () => uploadAsset().catch((err) => toast(err.message));
 $("export-bundle").onclick = () => exportBundle().catch((err) => toast(err.message));
+$("export-cubase").onclick = () => exportCubase().catch((err) => toast(err.message));
 $("shutdown-service").onclick = () => shutdownService().catch((err) => toast(err.message));
 $("refresh-board").onclick = () => refreshBoard().catch((err) => toast(err.message));
-$("open-archive").onclick = () => {
-  $("archive-drawer").classList.add("open");
-  $("archive-drawer").setAttribute("aria-hidden", "false");
-  $("edit-title").focus();
-};
-$("close-archive").onclick = () => {
-  $("archive-drawer").classList.remove("open");
-  $("archive-drawer").setAttribute("aria-hidden", "true");
-  $("open-archive").focus();
-};
+$("review-prompt-variant").onchange = markSelectedReviewPromptUsed;
+$("open-archive").onclick = () => modal("archive-drawer", true, $("open-archive"));
+$("close-archive").onclick = () => modal("archive-drawer", false);
 $("save-song").onclick = () => saveSong().catch((err) => toast(err.message));
 $("project-select").onchange = (event) => selectProject(event.target.value).catch((err) => toast(err.message));
 $("new-project").onclick = () => createProject().catch((err) => toast(err.message));
@@ -984,6 +1289,28 @@ $("close-project-modal").onclick = () => modal("project-modal", false);
 $("close-song-modal").onclick = () => modal("song-modal", false);
 $("create-project-submit").onclick = () => submitProject().catch((err) => toast(err.message));
 $("create-song-submit").onclick = () => submitSong().catch((err) => toast(err.message));
+
+document.addEventListener("keydown", (event) => {
+  if (!activeOverlay) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    modal(activeOverlay.id, false);
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [...activeOverlay.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => !element.hidden && element.getClientRects().length);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 
 loadAll().catch((err) => {
   console.error(err);

@@ -181,3 +181,24 @@ Automated API acceptance:
 - Suno Prompt Pack endpoint returns max three options and one recommendation.
 - Generation review can be saved.
 - Asset bundle export returns a zip containing the expected manifest and markdown files.
+
+## Suno Prompt Harness V2 Product Behavior
+
+Suno Prompt Pack is no longer a one-shot prompt. It is a scored, reviewable, and iterable prompt package.
+
+The user-facing product promise is:
+
+`Brief -> Normalize -> Compose -> Validate -> Variant -> Package -> Learn -> Iterate`
+
+Product requirements:
+
+- Generate no more than three packs.
+- Recommend exactly one pack.
+- Show why the recommendation was chosen.
+- Separate Style Prompt, Lyrics Prompt, and Exclude Prompt.
+- Show Music Spec, Route Spec, Advanced Settings, Validation, Revision Strategy, and Source Trace.
+- Allow copying Style Prompt, Lyrics Prompt, Exclude Prompt, and the full pack.
+- Preserve the V1 producer workflow: diagnosis -> hook_lab -> structure_lab -> lyrics_draft -> suno_prompt_lab -> generation_review -> asset_organizer.
+- Use generation reviews to change the next prompt pack.
+
+This keeps the tool anchored in EP production instead of becoming a generic prompt generator. The pack is a production decision record: it captures what the brief said, how the system normalized it, what route controls the sections, what passed validation, what feedback was learned, and what should be tried next.

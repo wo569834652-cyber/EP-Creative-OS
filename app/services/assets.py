@@ -1,6 +1,5 @@
 import hashlib
 import json
-import shutil
 import tempfile
 import zipfile
 from pathlib import Path
@@ -50,12 +49,100 @@ def _artifact_markdown(artifact: CreativeArtifact) -> str:
     return f"## {artifact.title}\n\n{artifact.summary}\n\n```json\n{json.dumps(artifact.content, ensure_ascii=False, indent=2)}\n```\n"
 
 
+def _prompt_pack_markdown(artifact: CreativeArtifact) -> str:
+    content = artifact.content or {}
+    recommended = content.get("recommended_pack") or {}
+    if not recommended and content.get("packs"):
+        recommended = next((pack for pack in content["packs"] if pack.get("recommended")), content["packs"][0])
+    if not recommended:
+        return _artifact_markdown(artifact)
+    validation = recommended.get("validation") or {}
+    settings = recommended.get("advanced_settings") or {}
+    return f"""## {artifact.title}
+
+{artifact.summary}
+
+### Recommended Variant
+
+{recommended.get("variant", "")} / {recommended.get("variant_role", "")}
+
+Reason: {recommended.get("recommendation_reason", "")}
+
+### Music Spec
+
+```json
+{json.dumps(recommended.get("music_spec") or {}, ensure_ascii=False, indent=2)}
+```
+
+### Style Prompt
+
+{recommended.get("style_prompt", "")}
+
+### Lyrics Prompt
+
+{recommended.get("lyrics_prompt", "")}
+
+### Exclude Prompt
+
+{recommended.get("exclude_prompt", "")}
+
+### Advanced Settings
+
+- Weirdness: {settings.get("weirdness")}
+- Style Influence: {settings.get("style_influence")}
+- Audio Influence: {settings.get("audio_influence")}
+
+### Validation Summary
+
+- Score: {validation.get("score")}
+- Passed Checks: {", ".join(validation.get("passed_checks", []) or []) or "none"}
+- Warnings: {", ".join(validation.get("warnings", []) or []) or "none"}
+- Blocking Issues: {", ".join(validation.get("blocking_issues", []) or []) or "none"}
+
+### Revision Strategy
+
+{recommended.get("revision_strategy", "")}
+
+### Source Trace
+
+```json
+{json.dumps(recommended.get("source_trace") or {}, ensure_ascii=False, indent=2)}
+```
+
+### Route Spec
+
+```json
+{json.dumps(recommended.get("route_spec") or {}, ensure_ascii=False, indent=2)}
+```
+
+### Feedback Summary
+
+```json
+{json.dumps(content.get("feedback_summary") or recommended.get("feedback_summary") or {}, ensure_ascii=False, indent=2)}
+```
+"""
+
+
+def _selected_prompt_artifacts(song: Song, artifacts: list[CreativeArtifact]) -> list[CreativeArtifact]:
+    prompt_artifacts = [a for a in artifacts if a.artifact_type == "suno_prompt_pack"]
+    if not prompt_artifacts:
+        return []
+    selected: list[CreativeArtifact] = []
+    if song.current_prompt_pack_id:
+        selected = [a for a in prompt_artifacts if a.id == song.current_prompt_pack_id]
+    if not selected:
+        selected = [a for a in prompt_artifacts if a.status == "accepted"]
+    if not selected:
+        selected = prompt_artifacts[-1:]
+    return selected
+
+
 def create_asset_bundle(db: Session, song: Song) -> Path:
     artifacts = list(
         db.scalars(
             select(CreativeArtifact)
             .where(CreativeArtifact.song_id == song.id)
-            .where(CreativeArtifact.status.in_(["accepted", "pending"]))
+            .where(CreativeArtifact.status == "accepted")
             .order_by(CreativeArtifact.created_at)
         ).all()
     )
@@ -67,29 +154,29 @@ def create_asset_bundle(db: Session, song: Song) -> Path:
     temp.close()
     path = Path(temp.name)
 
-    prompt_artifacts = [a for a in artifacts if a.artifact_type == "suno_prompt_pack"]
+    prompt_artifacts = _selected_prompt_artifacts(song, artifacts)
     review_artifacts = [a for a in artifacts if a.artifact_type == "generation_review"]
 
     song_md = f"""# {song.title}
 
-## 当前状态
+## Current State
 
-- 当前阶段：{song.current_stage}
-- 锁定 Hook：{song.locked_hook or "未锁定"}
-- 结构路线：{song.current_structure_route or "未选择"}
-- BPM：{song.bpm}
-- 风格方向：{song.genre_direction}
+- Current stage: {song.current_stage}
+- Locked hook: {song.locked_hook or "not locked"}
+- Structure route: {song.current_structure_route or "not selected"}
+- BPM: {song.bpm}
+- Genre direction: {song.genre_direction}
 
-## EP 功能
+## EP Function
 
 {song.function_in_ep}
 
-## 概念
+## Concept
 
 {song.concept}
 """
-    suno_md = "\n\n".join(_artifact_markdown(a) for a in prompt_artifacts) or "尚未接受 Suno Prompt Pack。"
-    reviews_md = "\n\n".join(_artifact_markdown(a) for a in review_artifacts) or "尚未记录生成复盘。"
+    suno_md = "\n\n".join(_prompt_pack_markdown(a) for a in prompt_artifacts) or "No accepted Suno Prompt Pack yet."
+    reviews_md = "\n\n".join(_artifact_markdown(a) for a in review_artifacts) or "No generation reviews yet."
     manifest = [
         {
             "id": asset.id,
@@ -103,14 +190,13 @@ def create_asset_bundle(db: Session, song: Song) -> Path:
     ]
     notes = f"""# Cubase Notes for {song.title}
 
-V1 只提供素材整理，不生成 Cubase 原生工程。
+V1 organizes production assets and does not generate a native Cubase project.
 
-建议：
-1. 在 Cubase 中新建工程，设置 BPM 为 {song.bpm}。
-2. 导入 Suno 下载的音频或 MIDI。
-3. 参考 song.md 的结构路线和 suno_prompt.md 的段落提示。
-4. 手动对齐音频起点和小节线。
-5. 将后续制作备注继续写回 EP Creative OS 的生成复盘。
+Suggested workflow:
+1. Create a new Cubase project and set BPM to {song.bpm}.
+2. Import downloaded Suno audio or MIDI.
+3. Use song.md for song context and suno_prompt.md for prompt, section, validation, and revision notes.
+4. Align audio manually to bar 1 and keep future production notes in EP Creative OS generation reviews.
 """
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -123,6 +209,6 @@ V1 只提供素材整理，不生成 Cubase 原生工程。
         for asset in assets:
             source = Path(asset.stored_path)
             if source.exists():
-                zf.write(source, f"uploads/{asset.filename}")
+                zf.write(source, f"uploads/{asset.id}_{asset.sha256[:8]}_{asset.filename}")
 
     return path

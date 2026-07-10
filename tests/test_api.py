@@ -15,6 +15,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.suno_engine import _recommend
+from app.services.suno_routes import get_route_spec
+from app.services.suno_validation import validate_lyrics_prompt, validate_style_prompt
 
 
 @pytest.fixture()
@@ -415,13 +418,14 @@ def test_suno_prompt_packs_are_limited_and_recommended(client, access_song):
     assert response.status_code == 200
     data = response.json()
     assert len(data["packs"]) <= 3
-    assert data["recommended_variant"] == "primary"
+    assert data["recommended_variant"] in {pack["variant"] for pack in data["packs"]}
     assert sum(1 for pack in data["packs"] if pack["recommended"]) == 1
-    style = data["packs"][0]["style_prompt"]
+    recommended = next(pack for pack in data["packs"] if pack["recommended"])
+    style = recommended["style_prompt"]
     assert "BPM" in style
-    assert "sonic identity" in style
+    assert "primary genre" in style
     assert "arrangement movement" in style
-    assert data["packs"][0]["style_specificity_score"] >= 70
+    assert recommended["style_specificity_score"] >= 70
     assert "Mandarin" not in style
     assert "Chinese" not in style
     assert "普通话" not in style
@@ -576,3 +580,240 @@ def test_chat_without_key_is_friendly(client, access_song):
     )
     assert response.status_code == 200
     assert "DEEPSEEK_API_KEY" in response.json()["assistant_message"]
+
+
+def _create_harness_song(client, **overrides):
+    ep = client.post(
+        "/api/eps",
+        json={
+            "title": overrides.pop("ep_title", "HARNESS TEST EP"),
+            "one_liner": "Harness loop tests",
+            "core_theme": "",
+            "world_view": "",
+            "emotional_keywords": [],
+            "aesthetic_keywords": [],
+            "sonic_layers": {},
+            "narrative_arc": "",
+            "song_list": [],
+        },
+    ).json()
+    payload = {
+        "ep_id": ep["id"],
+        "title": "Harness Song",
+        "function_in_ep": "tests the closed-loop Suno prompt workflow",
+        "concept": "a late-night room where one phrase keeps returning",
+        "emotional_goal": "cold, restrained, intimate",
+        "bpm": 92,
+        "genre_direction": "bedroom pop / lo-fi electronic",
+        "language_plan": "Chinese lyric with short English hook only",
+        "lyrics": "[Verse]\nlate light on the desk\n\n[Chorus]\nstay with me\nstay with me",
+        "style_prompt": "",
+        "lyrics_prompt": "",
+        "notes": "",
+        "current_stage": "suno_prompt_lab",
+        "stage_status": "not_started",
+        "locked_hook": "stay with me",
+        "current_structure_route": "classic_pop",
+        "current_prompt_pack_id": None,
+    }
+    payload.update(overrides)
+    response = client.post("/api/songs", json=payload)
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_suno_prompt_pack_contains_full_harness_fields(client):
+    song = _create_harness_song(client)
+    response = client.post(f"/api/songs/{song['id']}/suno-prompt-packs")
+    assert response.status_code == 200
+    pack = response.json()["packs"][0]
+    for field in [
+        "music_spec",
+        "route_spec",
+        "exclude_prompt",
+        "advanced_settings",
+        "validation",
+        "source_trace",
+        "variant_role",
+    ]:
+        assert field in pack
+    assert pack["validation"]["score"] > 0
+    assert pack["advanced_settings"]["style_influence"] is not None
+
+
+def test_suno_feedback_changes_next_prompt_pack(client):
+    song = _create_harness_song(client)
+    review = client.post(
+        f"/api/songs/{song['id']}/generation-reviews",
+        json={
+            "take_name": "feedback take",
+            "text_feedback": "drums too heavy, vocal too sweet, Hook is unclear",
+            "hook_accuracy": 2,
+            "style_accuracy": 3,
+            "section_structure": 3,
+            "diction_singability": 3,
+            "emotional_fit": 4,
+            "production_usability": 3,
+        },
+    )
+    assert review.status_code == 200
+    data = client.post(f"/api/songs/{song['id']}/suno-prompt-packs").json()
+    recommended = next(pack for pack in data["packs"] if pack["recommended"])
+    style = recommended["style_prompt"].lower()
+    lyrics = recommended["lyrics_prompt"].lower()
+    exclude = recommended["exclude_prompt"].lower()
+    assert "drums softened" in style
+    assert "less sweet" in style or "restrained vocal" in style
+    assert lyrics.count("stay with me") >= 2
+    assert "heavy drums" in exclude
+    assert recommended["source_trace"]["feedback_used"]
+
+
+def test_all_structure_routes_have_distinct_prompt_behavior(client):
+    expectations = {
+        "scene_cut": ["scene", "cut", "image transition"],
+        "body_memory": ["breath", "body", "tactile", "movement"],
+        "through_composed": ["through-composed", "echo", "reduced repetition"],
+    }
+    for route in ["classic_pop", "loop_mantra", "scene_cut", "error_system", "body_memory", "through_composed"]:
+        song = _create_harness_song(client, title=f"Route {route}", current_structure_route=route, ep_title=f"EP {route}")
+        pack = client.post(f"/api/songs/{song['id']}/suno-prompt-packs").json()["packs"][0]
+        combined = f"{pack['style_prompt']} {pack['lyrics_prompt']} {pack['route_spec']['arrangement_motion']}".lower()
+        if route in expectations:
+            assert all(term in combined for term in expectations[route])
+        if route != "error_system":
+            assert "access failure" not in combined
+            assert "failed-login" not in combined
+            assert "denial motif" not in combined
+
+
+def test_validation_blocks_language_label_pollution(client):
+    song = _create_harness_song(
+        client,
+        genre_direction="Mandarin Chinese bedroom pop / 中文 R&B",
+        emotional_goal="普通话 cold intimate vocal",
+    )
+    pack = client.post(f"/api/songs/{song['id']}/suno-prompt-packs").json()["packs"][0]
+    style = pack["style_prompt"]
+    assert "Mandarin" not in style
+    assert "Chinese" not in style
+    assert "普通话" not in style
+    assert "中文" not in style
+    assert pack["validation"]["warnings"]
+    assert "primary genre" in style
+
+
+def test_style_validator_blocks_actual_language_label_leak():
+    music_spec = {
+        "primary_genre": "bedroom pop",
+        "secondary_genre": "lo-fi electronic",
+        "bpm": 92,
+        "instrumentation": ["dry kick"],
+        "source_notes": [],
+    }
+    result = validate_style_prompt(
+        "primary genre: bedroom pop; secondary genre: lo-fi electronic; BPM: 92; vocal direction: close; instrumentation: dry kick; groove/drums: soft pulse; bass/low-end: warm sub; mix/space: dry room; Mandarin Chinese vocal.",
+        music_spec,
+    )
+    assert result["blocking_issues"]
+    assert result["score"] <= 68
+
+
+def test_lyrics_validator_does_not_require_control_prose_revision_target():
+    result = validate_lyrics_prompt(
+        "[Verse]\nI wait by the door\n[Chorus]\naccess denied\naccess denied",
+        "access denied",
+        {"section_map": [{"label": "Verse"}, {"label": "Chorus"}]},
+    )
+    assert "revision target present" not in result["blocking_issues"]
+    assert not result["blocking_issues"]
+
+
+def test_unknown_structure_route_falls_back_to_classic_pop_with_warning(client):
+    route = get_route_spec("unknown_route")
+    assert route["route"] == "classic_pop"
+    assert route["warnings"]
+    song = _create_harness_song(client, current_structure_route="unknown_route")
+    pack = client.post(f"/api/songs/{song['id']}/suno-prompt-packs").json()["packs"][0]
+    assert pack["route_spec"]["route"] == "classic_pop"
+    assert pack["route_spec"]["warnings"]
+
+
+def test_recommended_pack_uses_validation_score():
+    high = {
+        "variant": "alternate",
+        "variant_role": "bold",
+        "validation": {"score": 92, "blocking_issues": []},
+        "route_spec": {"stability_score": 7},
+        "source_trace": {"feedback_used": []},
+    }
+    low = {
+        "variant": "primary",
+        "variant_role": "safe",
+        "validation": {"score": 45, "blocking_issues": ["missing BPM"]},
+        "route_spec": {"stability_score": 9},
+        "source_trace": {"feedback_used": []},
+    }
+    recommended = _recommend([low, high], {"review_count": 0})
+    assert recommended["variant"] == "alternate"
+    assert high["recommended"] is True
+    assert low["recommended"] is False
+
+
+def test_generation_review_rejects_invalid_prompt_pack_id(client):
+    song_a = _create_harness_song(client, ep_title="REVIEW TRACE A")
+    song_b = _create_harness_song(client, ep_title="REVIEW TRACE B")
+    pack_b = client.post(f"/api/songs/{song_b['id']}/suno-prompt-packs").json()["artifact"]
+    missing = client.post(
+        f"/api/songs/{song_a['id']}/generation-reviews",
+        json={"take_name": "bad missing", "prompt_pack_artifact_id": 999999, "text_feedback": "ok"},
+    )
+    assert missing.status_code == 404
+    cross_song = client.post(
+        f"/api/songs/{song_a['id']}/generation-reviews",
+        json={"take_name": "bad cross", "prompt_pack_artifact_id": pack_b["id"], "text_feedback": "ok"},
+    )
+    assert cross_song.status_code == 422
+
+
+def test_generation_review_records_prompt_pack_trace(client):
+    song = _create_harness_song(client)
+    pack_artifact = client.post(f"/api/songs/{song['id']}/suno-prompt-packs").json()["artifact"]
+    alternate = next(pack["variant"] for pack in pack_artifact["content"]["packs"] if pack["variant"] != pack_artifact["content"]["recommended_variant"])
+    review = client.post(
+        f"/api/songs/{song['id']}/generation-reviews",
+        json={
+            "take_name": "trace ok",
+            "prompt_pack_artifact_id": pack_artifact["id"],
+            "prompt_pack_variant": alternate,
+            "text_feedback": "Hook is unclear",
+        },
+    )
+    assert review.status_code == 200
+    trace = review.json()["content"]["prompt_pack_trace"]
+    assert trace["prompt_pack_artifact_id"] == pack_artifact["id"]
+    assert trace["variant"] == alternate
+    assert trace["validation_score"] is not None
+
+    invalid_variant = client.post(
+        f"/api/songs/{song['id']}/generation-reviews",
+        json={"take_name": "bad variant", "prompt_pack_artifact_id": pack_artifact["id"], "prompt_pack_variant": "missing"},
+    )
+    assert invalid_variant.status_code == 422
+
+
+def test_asset_bundle_includes_exclude_and_validation(client):
+    song = _create_harness_song(client)
+    prompt = client.post(f"/api/songs/{song['id']}/suno-prompt-packs")
+    assert prompt.status_code == 200
+    client.post(f"/api/artifacts/{prompt.json()['artifact']['id']}/accept")
+    bundle = client.post(f"/api/songs/{song['id']}/exports/asset-bundle")
+    assert bundle.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
+        suno_md = zf.read("suno_prompt.md").decode("utf-8")
+    assert "Exclude Prompt" in suno_md
+    assert "Advanced Settings" in suno_md
+    assert "Validation Summary" in suno_md
+    assert "Route Spec" in suno_md
+    assert "Feedback Summary" in suno_md
+    assert "Weirdness:" in suno_md

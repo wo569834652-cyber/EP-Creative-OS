@@ -154,8 +154,27 @@ Suno prompt pack cards:
 - alternate and experimental packs collapsed by default
 - visible `Style Prompt`
 - visible `Lyrics Prompt`
+- visible `Exclude Prompt`
+- visible `Advanced Settings`
+- visible `Music Spec` summary
+- visible validation score, warnings, and blocking issues
+- visible feedback loop indicator when generation-review feedback was used
 - accepted lyrics should appear inside `Lyrics Prompt` when available
-- copy actions for each prompt and for the recommended full pack
+- copy actions for Style Prompt, Lyrics Prompt, Exclude Prompt, and the full pack
+
+Harness V2 cards must show:
+
+- variant name
+- variant role
+- recommended badge
+- validation score
+- warnings count
+- style specificity score
+- feedback-used indicator
+- recommendation reason
+- recurring feedback problems, blocked terms, and next revision bias when available
+
+Validation warnings and blocking issues should be prominent, but they must not prevent the user from copying a prompt.
 
 Stage advancement:
 

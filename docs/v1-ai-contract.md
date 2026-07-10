@@ -279,3 +279,48 @@ Every Suno Prompt Pack should be checked for:
 - revision strategy present
 
 The API can return warnings rather than blocking generation.
+
+## Suno Prompt Harness V2 Contract
+
+Suno Prompt Lab is a deterministic closed loop:
+
+`Brief -> Normalize -> Compose -> Validate -> Variant -> Package -> Learn -> Iterate`
+
+Runtime models must not research or invent Suno prompt methodology. The engine uses local rules, route templates, validators, and review feedback.
+
+Prompt pack artifact content now includes:
+
+- `packs`: at most three pack objects.
+- `recommended_variant`: the selected variant name.
+- `recommended_pack`: the selected full pack.
+- `feedback_summary`: recent generation-review signals used for the next pass.
+
+Each pack includes:
+
+- `variant` and `variant_role`
+- `recommended` and `recommendation_reason`
+- `music_spec`
+- `route_spec`
+- `style_prompt`
+- `lyrics_prompt`
+- `exclude_prompt`
+- `advanced_settings`
+- `validation`
+- `negative_terms`
+- `hook_delivery_notes`
+- `section_control_notes`
+- `revision_strategy`
+- `suno_risks`
+- `source_trace`
+- `style_specificity_score`
+- legacy-compatible `quality_checks` and `lyrics_source`
+
+`MusicSpec` includes use case, language plan, primary genre, secondary genre, mood, BPM, tempo feel, vocal type, vocal delivery, instrumentation, rhythm/groove, bass behavior, harmony palette, production texture, mix space, energy curve, commercial safety, and source notes. Language labels are retained only in `language_plan` or metadata, never in `style_prompt`.
+
+`RouteSpec` comes from the registry for `classic_pop`, `loop_mantra`, `scene_cut`, `error_system`, `body_memory`, and `through_composed`. Unknown routes fall back to `classic_pop` and emit a warning. `error_system` is reserved for explicit access-failure or error-system narratives.
+
+`Validation` includes `score`, `passed_checks`, `warnings`, and `blocking_issues`. Recommendation uses validation score, route stability, variant role, and feedback fit. It is not hard-coded to `primary`.
+
+`advanced_settings` includes `weirdness`, `style_influence`, and `audio_influence`.
+
+Generation reviews create `FeedbackSummary` data with `review_count`, `winning_terms`, `blocked_terms`, `recurring_problems`, `next_revision_bias`, and `feedback_used`. The next prompt pack must use those signals in music spec normalization, prompt text, exclude terms, revision strategy, and source trace.

@@ -58,3 +58,44 @@ Browser QA covered:
 - V1 does not analyze audio directly.
 - V1 does not generate a Cubase-native project file.
 - V1 uses deterministic local stage outputs and deterministic Suno prompt rules; DeepSeek can be integrated for conversational assistance, but prompt methodology is encoded in code rather than researched at runtime.
+
+## Harness V2 QA Addendum
+
+The Suno Prompt Lab now exposes a closed-loop prompt package rather than only Style and Lyrics fields.
+
+Additional checks covered:
+
+- Prompt cards show variant role, recommendation reason, validation score, warning count, style specificity, and feedback-used state.
+- Recommended pack opens by default while comparison packs remain collapsible.
+- Style Prompt, Lyrics Prompt, Exclude Prompt, and Full Pack are copyable.
+- Music Spec, Advanced Settings, Validation, Feedback Summary, Revision Strategy, and Source Trace are visible in the pack card.
+- Blocking validation issues are visually prominent but do not block copy actions.
+- Generation review feedback changes the next prompt pack and is recorded in `source_trace.feedback_used`.
+- Asset bundle `suno_prompt.md` includes Recommended Variant, Music Spec, Style Prompt, Lyrics Prompt, Exclude Prompt, Advanced Settings, Validation Summary, Revision Strategy, and Source Trace.
+
+Automated verification for this pass:
+
+- `python -m compileall app`
+- `node --check app/static/app.js`
+- `pytest -q`
+
+## Multi-Agent Experience Review Addendum
+
+Five read-only `gpt-5.4` reviewers covered first-time use, producer workflow, Suno-heavy use, delivery, and accessibility. The main agent reconciled their findings against a live browser pass before making changes.
+
+Confirmed findings and fixes:
+
+- Legacy Prompt artifacts no longer render fake V2 metrics such as `0/100`; they use the compatible legacy view and show a regeneration notice.
+- Copying a Suno-ready variant records the actual `artifact + variant`, and the generation review form can explicitly select the variant being evaluated.
+- The API validates the selected variant and records its own validation/source trace instead of always attributing feedback to the recommendation.
+- Accepted/current content is separated from pending work in formal asset exports.
+- Cubase pack export is reachable from the main interface and explains that the result is an import pack, not a `.cpr` project.
+- Desktop and mobile layouts have no horizontal overflow; the stage guide no longer clips inside the three-column desktop shell.
+- Dialog semantics, Escape handling, focus return, live status regions, visible focus styles, and keyboard-reachable file upload were added.
+- A contradictory Lyrics Prompt validation rule was removed. Revision strategy remains metadata and is not required as control prose inside lyrics.
+
+Rejected finding:
+
+- Static reviewers reported mojibake in Chinese source text. Live browser inspection showed correctly rendered Chinese throughout the tested interface, so no encoding rewrite was applied.
+
+Final verification for this pass: `27 passed`, JavaScript syntax check passed, Python compilation passed, and browser QA covered 1280px desktop plus 390px mobile widths.
